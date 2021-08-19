@@ -1,0 +1,20 @@
+[package]
+name = "jibi2"
+description = "An interpreted Scheme dialect."
+version = "0.0.1"
+authors = ["Jérome Boisvert-Chouinard"]
+repository = "https://github.com/jbchouinard/jibi2"
+license = "MIT"
+readme = "README.md"
+edition = "2018"
+
+[lib]
+name = "jibi2"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jibi2"
+path = "src/main.rs"
+
+[dependencies]
+
