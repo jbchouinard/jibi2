@@ -1,3 +1,7 @@
+use jibi2::chunk::{Chunk, OpCode};
+
 fn main() {
-    println!("Hello, world!");
+    let mut chunk = Chunk::new();
+    chunk.write(OpCode::Return);
+    chunk.disassemble("test chunk");
 }
