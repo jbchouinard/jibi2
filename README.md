@@ -3,7 +3,7 @@
 # jibi2
 
 A re-implementation of [jibi](https://github.com/jbchouinard/jibi) with a bytecode
-compiler and VM interpreter instead of a tree-walk interpreter.
+compiler and stack-based VM interpreter instead of a tree-walk interpreter.
 
 Inspired by [Crafting Interpreters](https://craftinginterpreters.com).
 
