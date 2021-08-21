@@ -6,6 +6,12 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    NumEq,
+    NumNeq,
+    NumLt,
+    NumLte,
+    NumGt,
+    NumGte,
     Pop,
     DefGlobal,
     GetGlobal,
@@ -36,46 +42,93 @@ impl Op {
     }
 }
 
-pub struct Ins<const N: usize> {
+pub struct Instruction<const N: usize> {
     pub op: Op,
     pub operands: [u8; N],
 }
 
-impl<const N: usize> Ins<N> {
-    pub fn new(op: Op) -> Self {
-        Self {
-            op,
-            operands: [0; N],
-        }
+impl<const N: usize> Instruction<N> {
+    pub fn new(op: Op, operands: [u8; N]) -> Self {
+        Self { op, operands }
     }
 }
 
-pub enum Instruction {
-    Op0(Ins<0>),
-    Op1(Ins<1>),
-    Op2(Ins<2>),
+impl Instruction<1> {
+    pub fn get_constant_n(&self) -> usize {
+        self.operands[0] as usize
+    }
 }
 
-impl Instruction {
-    pub fn from_op(op: Op) -> Self {
-        match op {
-            Op::Add => Self::Op1(Ins::new(Op::Add)),
-            Op::Sub => Self::Op1(Ins::new(Op::Sub)),
-            Op::Mul => Self::Op1(Ins::new(Op::Mul)),
-            Op::Div => Self::Op1(Ins::new(Op::Div)),
-            Op::Pop => Self::Op0(Ins::new(Op::Pop)),
-            Op::DefGlobal => Self::Op0(Ins::new(Op::DefGlobal)),
-            Op::GetGlobal => Self::Op0(Ins::new(Op::GetGlobal)),
-            Op::Return => Self::Op0(Ins::new(Op::Return)),
-            Op::Constant => Self::Op1(Ins::new(Op::Constant)),
-            Op::ConstantLong => Self::Op2(Ins::new(Op::ConstantLong)),
-        }
+impl Instruction<2> {
+    pub fn get_constant_n(&self) -> usize {
+        ((self.operands[0] as usize) * (u8::MAX as usize)) + (self.operands[1] as usize)
     }
-    pub fn op(&self) -> Op {
+}
+
+pub fn instruction_add(n: u8) -> Instruction<1> {
+    Instruction::new(Op::Add, [n])
+}
+pub fn instruction_sub(n: u8) -> Instruction<1> {
+    Instruction::new(Op::Sub, [n])
+}
+pub fn instruction_mul(n: u8) -> Instruction<1> {
+    Instruction::new(Op::Mul, [n])
+}
+pub fn instruction_div(n: u8) -> Instruction<1> {
+    Instruction::new(Op::Div, [n])
+}
+pub fn instruction_num_eq() -> Instruction<0> {
+    Instruction::new(Op::NumEq, [])
+}
+pub fn instruction_num_neq() -> Instruction<0> {
+    Instruction::new(Op::NumNeq, [])
+}
+pub fn instruction_num_lt() -> Instruction<0> {
+    Instruction::new(Op::NumLt, [])
+}
+pub fn instruction_num_lte() -> Instruction<0> {
+    Instruction::new(Op::NumLte, [])
+}
+pub fn instruction_num_gt() -> Instruction<0> {
+    Instruction::new(Op::NumGt, [])
+}
+pub fn instruction_num_gte() -> Instruction<0> {
+    Instruction::new(Op::NumGte, [])
+}
+pub fn instruction_pop() -> Instruction<0> {
+    Instruction::new(Op::Pop, [])
+}
+pub fn instruction_def_global() -> Instruction<0> {
+    Instruction::new(Op::DefGlobal, [])
+}
+pub fn instruction_get_global() -> Instruction<0> {
+    Instruction::new(Op::GetGlobal, [])
+}
+pub fn instruction_constant(n: u8) -> Instruction<1> {
+    Instruction::new(Op::Constant, [n])
+}
+pub fn instruction_constant_long(n: u16) -> Instruction<2> {
+    Instruction::new(
+        Op::ConstantLong,
+        [(n / (u8::MAX as u16)) as u8, (n % (u8::MAX as u16)) as u8],
+    )
+}
+pub fn instruction_return() -> Instruction<0> {
+    Instruction::new(Op::Return, [])
+}
+
+pub enum AnyInstruction {
+    Op0(Instruction<0>),
+    Op1(Instruction<1>),
+    Op2(Instruction<2>),
+}
+
+impl AnyInstruction {
+    pub fn op(&self) -> &Op {
         match self {
-            Self::Op0(ins) => ins.op.clone(),
-            Self::Op1(ins) => ins.op.clone(),
-            Self::Op2(ins) => ins.op.clone(),
+            Self::Op0(ins) => &ins.op,
+            Self::Op1(ins) => &ins.op,
+            Self::Op2(ins) => &ins.op,
         }
     }
     pub fn get_operand(&self, n: usize) -> u8 {
@@ -85,17 +138,6 @@ impl Instruction {
             Self::Op2(ins) => ins.operands[n],
         }
     }
-    pub fn set_operand(&mut self, n: usize, val: u8) {
-        match self {
-            Self::Op0(ins) => ins.operands[n] = val,
-            Self::Op1(ins) => ins.operands[n] = val,
-            Self::Op2(ins) => ins.operands[n] = val,
-        }
-    }
-    pub fn with_operand(mut self, n: usize, val: u8) -> Self {
-        self.set_operand(n, val);
-        self
-    }
     pub fn size(&self) -> usize {
         match self {
             Self::Op0(_) => 1,
@@ -103,48 +145,39 @@ impl Instruction {
             Self::Op2(_) => 3,
         }
     }
-    pub fn op_return() -> Self {
-        Self::from_op(Op::Return)
-    }
-    pub fn op_defglobal() -> Self {
-        Self::from_op(Op::DefGlobal)
-    }
-    pub fn op_getglobal() -> Self {
-        Self::from_op(Op::GetGlobal)
-    }
-    pub fn op_pop() -> Self {
-        Self::from_op(Op::Pop)
-    }
-    pub fn op_add(n: u8) -> Self {
-        Self::from_op(Op::Add).with_operand(0, n)
-    }
-    pub fn op_sub(n: u8) -> Self {
-        Self::from_op(Op::Sub).with_operand(0, n)
-    }
-    pub fn op_mul(n: u8) -> Self {
-        Self::from_op(Op::Mul).with_operand(0, n)
-    }
-    pub fn op_div(n: u8) -> Self {
-        Self::from_op(Op::Div).with_operand(0, n)
-    }
-    pub fn op_constant(n: usize) -> Self {
-        if n <= u8::MAX as usize {
-            Self::from_op(Op::Constant).with_operand(0, n as u8)
-        } else if n <= u16::MAX as usize {
-            Self::from_op(Op::ConstantLong)
-                .with_operand(0, (n / (u8::MAX as usize)) as u8)
-                .with_operand(1, (n % (u8::MAX as usize)) as u8)
-        } else {
-            panic!("too many constants");
+    pub fn get_constant_n(&self) -> usize {
+        match self {
+            Self::Op1(ins) => ins.get_constant_n(),
+            Self::Op2(ins) => ins.get_constant_n(),
+            _ => panic!("not a constant"),
         }
     }
-    pub fn get_constant_n(&self) -> usize {
-        match self.op() {
-            Op::Constant => self.get_operand(0) as usize,
-            Op::ConstantLong => {
-                (u8::MAX as usize) * (self.get_operand(0) as usize) + (self.get_operand(1) as usize)
-            }
-            _ => panic!("not a constant"),
+    pub fn read(code: &[u8], pos: usize) -> (Self, usize) {
+        use AnyInstruction::*;
+        let opcode = code[pos];
+        let op = Op::from_byte(opcode);
+        match op {
+            Op::Add => (Op1(instruction_add(code[pos + 1])), pos + 2),
+            Op::Sub => (Op1(instruction_sub(code[pos + 1])), pos + 2),
+            Op::Mul => (Op1(instruction_mul(code[pos + 1])), pos + 2),
+            Op::Div => (Op1(instruction_div(code[pos + 1])), pos + 2),
+            Op::NumEq => (Op0(instruction_num_eq()), pos + 1),
+            Op::NumNeq => (Op0(instruction_num_neq()), pos + 1),
+            Op::NumLt => (Op0(instruction_num_lt()), pos + 1),
+            Op::NumLte => (Op0(instruction_num_lte()), pos + 1),
+            Op::NumGt => (Op0(instruction_num_gt()), pos + 1),
+            Op::NumGte => (Op0(instruction_num_gte()), pos + 1),
+            Op::Pop => (Op0(instruction_pop()), pos + 1),
+            Op::DefGlobal => (Op0(instruction_def_global()), pos + 1),
+            Op::GetGlobal => (Op0(instruction_def_global()), pos + 1),
+            Op::Constant => (Op1(instruction_constant(code[pos + 1])), pos + 2),
+            Op::ConstantLong => (
+                Op2(instruction_constant_long(
+                    (u8::MAX as u16 * code[pos + 1] as u16) + (code[pos + 2] as u16),
+                )),
+                pos + 4,
+            ),
+            Op::Return => (Op0(instruction_return()), pos + 1),
         }
     }
 }

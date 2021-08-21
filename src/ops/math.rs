@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{Result, RuntimeError};
 use crate::value::{FloatType, IntType, TypeError, Value};
-use crate::vararg_op;
+use crate::{binary_op, vararg_op};
 
 vararg_op!(op_add, args, {
     let mut acc = Number::Int(0);
@@ -41,6 +41,30 @@ vararg_op!(op_div, args, {
         acc = acc.div(&n.to_number()?)?;
     }
     acc.to_val()
+});
+
+binary_op!(op_num_eq, x, y, {
+    Value::Bool(x.to_number()?.eq(&y.to_number()?)?)
+});
+
+binary_op!(op_num_neq, x, y, {
+    Value::Bool(x.to_number()?.neq(&y.to_number()?)?)
+});
+
+binary_op!(op_num_lt, x, y, {
+    Value::Bool(x.to_number()?.lt(&y.to_number()?)?)
+});
+
+binary_op!(op_num_lte, x, y, {
+    Value::Bool(x.to_number()?.lte(&y.to_number()?)?)
+});
+
+binary_op!(op_num_gt, x, y, {
+    Value::Bool(x.to_number()?.gte(&y.to_number()?)?)
+});
+
+binary_op!(op_num_gte, x, y, {
+    Value::Bool(x.to_number()?.gte(&y.to_number()?)?)
 });
 
 pub enum Number {
@@ -126,6 +150,7 @@ impl Number {
             Ok(Self::Float(self.as_float()? / other.as_float()?))
         }
     }
+    #[inline(always)]
     fn eq(&self, other: &Self) -> Result<bool> {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             Ok(n == m)
@@ -133,6 +158,16 @@ impl Number {
             Ok(self.as_float()? == other.as_float()?)
         }
     }
+    #[inline(always)]
+    fn neq(&self, other: &Self) -> Result<bool> {
+        if let (Self::Int(n), Self::Int(m)) = (self, other) {
+            Ok(n != m)
+        } else {
+            #[allow(clippy::float_cmp)]
+            Ok(self.as_float()? != other.as_float()?)
+        }
+    }
+    #[inline(always)]
     fn lt(&self, other: &Self) -> Result<bool> {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             Ok(n < m)
@@ -140,6 +175,7 @@ impl Number {
             Ok(self.as_float()? < other.as_float()?)
         }
     }
+    #[inline(always)]
     fn lte(&self, other: &Self) -> Result<bool> {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             Ok(n <= m)
@@ -147,6 +183,7 @@ impl Number {
             Ok(self.as_float()? <= other.as_float()?)
         }
     }
+    #[inline(always)]
     fn gt(&self, other: &Self) -> Result<bool> {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             Ok(n > m)
@@ -154,6 +191,7 @@ impl Number {
             Ok(self.as_float()? > other.as_float()?)
         }
     }
+    #[inline(always)]
     fn gte(&self, other: &Self) -> Result<bool> {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             Ok(n >= m)

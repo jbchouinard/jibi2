@@ -9,8 +9,20 @@ macro_rules! vararg_op {
             for _ in 0..nargs {
                 $args.push(stack.pop().unwrap());
             }
-            let res = $b;
-            stack.push(res);
+            stack.push($b);
+            Ok(())
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! binary_op {
+    ($name:ident, $x:ident, $y:ident, $b:block) => {
+        #[inline(always)]
+        pub fn $name(stack: &mut $crate::vm::Stack) -> Result<()> {
+            let $y = stack.pop().unwrap();
+            let $x = stack.pop().unwrap();
+            stack.push($b);
             Ok(())
         }
     };

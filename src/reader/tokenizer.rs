@@ -22,14 +22,14 @@ impl fmt::Display for TokenValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use TokenValue::*;
         match &self {
-            None => write!(f, "NONE"),
-            Int(n) => write!(f, "INT({})", n),
-            Float(x) => write!(f, "FLOAT({})", x),
-            Ident(s) => write!(f, "IDENT({})", s),
-            Keyword(k) => write!(f, "KEYWORD({})", k),
-            String(s) => write!(f, "STRING(\"{}\")", s),
-            Eof => write!(f, "EOF"),
-            Char(c) => write!(f, "CHAR('{}')", c),
+            Eof => write!(f, "#EOF"),
+            None => write!(f, "#NONE"),
+            Int(n) => write!(f, "Int({})", n),
+            Float(x) => write!(f, "Float({})", x),
+            Ident(s) => write!(f, "Ident({})", s),
+            Keyword(k) => write!(f, "Keyword({})", k),
+            String(s) => write!(f, "String(\"{}\")", s),
+            Char(c) => write!(f, "Char('{}')", c),
         }
     }
 }
@@ -59,7 +59,17 @@ impl fmt::Display for Token {
 }
 
 lazy_static! {
-    static ref RE_KEYWORD: Regex = Regex::new(r"^(def|let|set!|\+|-|/|\*|>|>=|<|<=)").unwrap();
+    static ref RE_KEYWORD: Regex = Regex::new(
+        r"(?x)
+            ^(
+            def|let|set!
+            |\+|-|/|\*
+            |=|!=|>|>=|<|<=
+            |nil|true|false
+            )
+        "
+    )
+    .unwrap();
     static ref RE_WS: Regex = Regex::new(r"^\s+").unwrap();
     static ref RE_IDENT: Regex = Regex::new(
         r"(?x)
@@ -176,7 +186,7 @@ impl Tokenizer {
                 self.pos += mat.end();
                 match cons(mat.as_str()) {
                     Ok(tokval) => Ok(Some(Token::new(tokval, self.ptag(spos)))),
-                    Err(reason) => Err(LexError::new(&reason, self.ptag(spos))),
+                    Err(reason) => Err(LexError::new(reason, self.ptag(spos))),
                 }
             }
             None => Ok(None),
@@ -243,7 +253,7 @@ impl TokenProducer for Tokenizer {
             return Ok(token);
         }
         Err(LexError::new(
-            &format!(
+            format!(
                 "unexpected character {}",
                 &self.input[self.pos..self.pos + 1]
             ),
@@ -291,13 +301,22 @@ impl TokenValidator {
                 TokenValue::Char('(') => self.balance.push(TokenValue::Char('(')),
                 TokenValue::Char(')') => match self.balance.pop() {
                     Some(TokenValue::Char('(')) => (),
-                    _ => return Err(LexError::new("unexpected closing parens", tok.pos)),
+                    _ => {
+                        return Err(LexError::new(
+                            "unexpected closing parens".to_string(),
+                            tok.pos,
+                        ))
+                    }
                 },
                 _ => (),
             }
             self.tokens.push(tok);
         }
         Ok(if self.balance.is_empty() {
+            self.tokens.push(Token::new(
+                TokenValue::Eof,
+                PositionTag::new(&self.filename, self.lineno + 1, 0),
+            ));
             Some(std::mem::take(&mut self.tokens))
         } else {
             None
@@ -318,11 +337,8 @@ impl fmt::Display for LexError {
 }
 
 impl LexError {
-    pub fn new(reason: &str, pos: PositionTag) -> Self {
-        Self {
-            pos,
-            reason: reason.to_string(),
-        }
+    pub fn new(reason: String, pos: PositionTag) -> Self {
+        Self { pos, reason }
     }
 }
 

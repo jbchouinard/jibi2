@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::chunk::Chunk;
 use crate::compiler::{compile_source, compile_tokens};
 use crate::error::Result;
-use crate::instruction::Op;
+use crate::instruction::{AnyInstruction, Op};
 use crate::ops::math::*;
 use crate::reader::TokenProducer;
 use crate::value::Value;
@@ -68,12 +68,18 @@ impl VM {
             if self.stack.len() > MAX_STACK_SIZE {
                 panic!("stack too large");
             }
-            let ins = &chunk.code[self.pos];
+            let (ins, newpos) = AnyInstruction::read(&chunk.code, self.pos);
             match ins.op() {
                 Op::Add => op_add(&mut self.stack, ins.get_operand(0))?,
                 Op::Sub => op_sub(&mut self.stack, ins.get_operand(0))?,
                 Op::Mul => op_mul(&mut self.stack, ins.get_operand(0))?,
                 Op::Div => op_div(&mut self.stack, ins.get_operand(0))?,
+                Op::NumEq => op_num_eq(&mut self.stack)?,
+                Op::NumNeq => op_num_neq(&mut self.stack)?,
+                Op::NumLt => op_num_lt(&mut self.stack)?,
+                Op::NumLte => op_num_lte(&mut self.stack)?,
+                Op::NumGt => op_num_gt(&mut self.stack)?,
+                Op::NumGte => op_num_gte(&mut self.stack)?,
                 Op::Pop => {
                     self.stack.pop().unwrap();
                 }
@@ -101,7 +107,7 @@ impl VM {
                     .stack
                     .push(chunk.constants[ins.get_constant_n()].clone()),
             }
-            self.pos += 1;
+            self.pos = newpos;
         }
     }
     pub fn reset_stack(&mut self) {

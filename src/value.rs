@@ -1,4 +1,5 @@
 use std::fmt;
+use std::rc::Rc;
 
 use crate::error::Result;
 use crate::ops::math::Number;
@@ -8,11 +9,12 @@ pub type FloatType = f64;
 
 #[derive(Debug, Clone)]
 pub enum Value {
-    Symbol(String),
-    Float(FloatType),
-    Int(IntType),
-    Bool(bool),
     Nil,
+    Symbol(Rc<String>),
+    String(Rc<String>),
+    Int(IntType),
+    Float(FloatType),
+    Bool(bool),
 }
 
 impl fmt::Display for Value {
@@ -23,6 +25,7 @@ impl fmt::Display for Value {
             Self::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Self::Nil => write!(f, "nil"),
             Self::Symbol(s) => write!(f, "{}", s),
+            Self::String(s) => write!(f, "\"{}\"", s),
         }
     }
 }
@@ -33,7 +36,7 @@ impl Value {
     }
     pub fn to_symbol(self) -> Result<String> {
         match self {
-            Value::Symbol(s) => Ok(s),
+            Value::Symbol(s) => Ok(s.to_string()),
             _ => Err(TypeError::new("symbol".to_string()).into()),
         }
     }
