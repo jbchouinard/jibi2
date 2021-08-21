@@ -2,11 +2,13 @@ pub struct Operand(u8);
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Op {
-    Negate,
     Add,
     Sub,
     Mul,
     Div,
+    Pop,
+    DefGlobal,
+    GetGlobal,
     Constant,
     ConstantLong,
     Return,
@@ -18,11 +20,13 @@ impl Op {
     }
     pub fn from_byte(n: u8) -> Self {
         match n {
-            n if n == Self::Negate as u8 => Self::Negate,
             n if n == Self::Add as u8 => Self::Add,
             n if n == Self::Sub as u8 => Self::Sub,
             n if n == Self::Mul as u8 => Self::Mul,
             n if n == Self::Div as u8 => Self::Div,
+            n if n == Self::Pop as u8 => Self::Pop,
+            n if n == Self::DefGlobal as u8 => Self::DefGlobal,
+            n if n == Self::GetGlobal as u8 => Self::DefGlobal,
             n if n == Self::Constant as u8 => Self::Constant,
             n if n == Self::ConstantLong as u8 => Self::ConstantLong,
             n if n == Self::Return as u8 => Self::Return,
@@ -55,11 +59,13 @@ pub enum Instruction {
 impl Instruction {
     pub fn from_op(op: Op) -> Self {
         match op {
-            Op::Negate => Self::Op1(Ins::new(Op::Negate)),
             Op::Add => Self::Op1(Ins::new(Op::Add)),
             Op::Sub => Self::Op1(Ins::new(Op::Sub)),
             Op::Mul => Self::Op1(Ins::new(Op::Mul)),
             Op::Div => Self::Op1(Ins::new(Op::Div)),
+            Op::Pop => Self::Op0(Ins::new(Op::Pop)),
+            Op::DefGlobal => Self::Op0(Ins::new(Op::DefGlobal)),
+            Op::GetGlobal => Self::Op0(Ins::new(Op::GetGlobal)),
             Op::Return => Self::Op0(Ins::new(Op::Return)),
             Op::Constant => Self::Op1(Ins::new(Op::Constant)),
             Op::ConstantLong => Self::Op2(Ins::new(Op::ConstantLong)),
@@ -100,20 +106,26 @@ impl Instruction {
     pub fn op_return() -> Self {
         Self::from_op(Op::Return)
     }
-    pub fn op_add() -> Self {
-        Self::from_op(Op::Add)
+    pub fn op_defglobal() -> Self {
+        Self::from_op(Op::DefGlobal)
     }
-    pub fn op_sub() -> Self {
-        Self::from_op(Op::Sub)
+    pub fn op_getglobal() -> Self {
+        Self::from_op(Op::GetGlobal)
     }
-    pub fn op_mul() -> Self {
-        Self::from_op(Op::Mul)
+    pub fn op_pop() -> Self {
+        Self::from_op(Op::Pop)
     }
-    pub fn op_div() -> Self {
-        Self::from_op(Op::Div)
+    pub fn op_add(n: u8) -> Self {
+        Self::from_op(Op::Add).with_operand(0, n)
     }
-    pub fn op_negate() -> Self {
-        Self::from_op(Op::Negate)
+    pub fn op_sub(n: u8) -> Self {
+        Self::from_op(Op::Sub).with_operand(0, n)
+    }
+    pub fn op_mul(n: u8) -> Self {
+        Self::from_op(Op::Mul).with_operand(0, n)
+    }
+    pub fn op_div(n: u8) -> Self {
+        Self::from_op(Op::Div).with_operand(0, n)
     }
     pub fn op_constant(n: usize) -> Self {
         if n <= u8::MAX as usize {

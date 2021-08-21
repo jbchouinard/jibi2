@@ -8,12 +8,30 @@ use crate::value::{FloatType, IntType};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenValue {
+    None,
     Char(char),
     Int(IntType),
     Float(FloatType),
+    Keyword(String),
     Ident(String),
     String(String),
     Eof,
+}
+
+impl fmt::Display for TokenValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use TokenValue::*;
+        match &self {
+            None => write!(f, "NONE"),
+            Int(n) => write!(f, "INT({})", n),
+            Float(x) => write!(f, "FLOAT({})", x),
+            Ident(s) => write!(f, "IDENT({})", s),
+            Keyword(k) => write!(f, "KEYWORD({})", k),
+            String(s) => write!(f, "STRING(\"{}\")", s),
+            Eof => write!(f, "EOF"),
+            Char(c) => write!(f, "CHAR('{}')", c),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -36,19 +54,12 @@ impl PartialEq for Token {
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use TokenValue::*;
-        match &self.value {
-            Int(n) => write!(f, "INT({})", n),
-            Float(x) => write!(f, "FLOAT({})", x),
-            Ident(s) => write!(f, "IDENT({})", s),
-            String(s) => write!(f, "STRING(\"{}\")", s),
-            Eof => write!(f, "EOF"),
-            Char(c) => write!(f, "CHAR('{}')", c),
-        }
+        write!(f, "token {} at {}", self.value, self.pos)
     }
 }
 
 lazy_static! {
+    static ref RE_KEYWORD: Regex = Regex::new(r"^(def|let|set!|\+|-|/|\*|>|>=|<|<=)").unwrap();
     static ref RE_WS: Regex = Regex::new(r"^\s+").unwrap();
     static ref RE_IDENT: Regex = Regex::new(
         r"(?x)
@@ -87,6 +98,10 @@ fn t_ident(val: &str) -> TResult {
 
 fn t_string(val: &str) -> TResult {
     Ok(TokenValue::String(val[1..val.len() - 1].to_string()))
+}
+
+fn t_keyword(val: &str) -> TResult {
+    Ok(TokenValue::Keyword(val.to_string()))
 }
 
 fn t_char(s: &str) -> TResult {
@@ -215,6 +230,9 @@ impl TokenProducer for Tokenizer {
         if let Some(token) = self.try_token(&RE_INT, t_int)? {
             return Ok(token);
         }
+        if let Some(token) = self.try_token(&RE_KEYWORD, t_keyword)? {
+            return Ok(token);
+        }
         if let Some(token) = self.try_token(&RE_IDENT, t_ident)? {
             return Ok(token);
         }
@@ -282,8 +300,6 @@ impl TokenValidator {
         Ok(if self.balance.is_empty() {
             Some(std::mem::take(&mut self.tokens))
         } else {
-            // Remove the last EOF token
-            self.tokens.pop();
             None
         })
     }

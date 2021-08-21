@@ -60,7 +60,7 @@ fn repl(vm: &mut VM) {
 
     loop {
         match get_tokens(&mut rl) {
-            Ok(tokens) => match vm.interpret_tokens(tokens) {
+            Ok(tokens) => match vm.interpret_tokens(Box::new(tokens.into_iter())) {
                 Ok(()) => (),
                 Err(e) => eprintln!("{}", e),
             },

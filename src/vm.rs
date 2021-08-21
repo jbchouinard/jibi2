@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
@@ -7,10 +8,10 @@ use crate::compiler::{compile_source, compile_tokens};
 use crate::error::Result;
 use crate::instruction::Op;
 use crate::ops::math::*;
-use crate::reader::Token;
+use crate::reader::TokenProducer;
 use crate::value::Value;
 
-const INITIAL_STACK_SIZE: usize = 256;
+const INI_STACK_SIZE: usize = 256;
 const MAX_STACK_SIZE: usize = 16 * 1024;
 
 pub type Stack = Vec<Value>;
@@ -19,6 +20,7 @@ pub struct VM {
     chunk: Option<Chunk>,
     pos: usize,
     stack: Stack,
+    globals: HashMap<String, Value>,
 }
 
 impl VM {
@@ -26,16 +28,21 @@ impl VM {
         Self {
             chunk: None,
             pos: 0,
-            stack: Vec::with_capacity(INITIAL_STACK_SIZE),
+            stack: Vec::with_capacity(INI_STACK_SIZE),
+            globals: HashMap::new(),
         }
     }
     pub fn interpret_source(&mut self, filename: &str, source: &str) -> Result<()> {
-        self.chunk = Some(compile_source(filename, source)?);
+        let mut chunk = Chunk::new();
+        compile_source(filename, source, &mut chunk)?;
+        self.chunk = Some(chunk);
         self.pos = 0;
         self.run()
     }
-    pub fn interpret_tokens(&mut self, tokens: Vec<Token>) -> Result<()> {
-        self.chunk = Some(compile_tokens(tokens)?);
+    pub fn interpret_tokens(&mut self, producer: Box<dyn TokenProducer>) -> Result<()> {
+        let mut chunk = Chunk::new();
+        compile_tokens(producer, &mut chunk)?;
+        self.chunk = Some(chunk);
         self.pos = 0;
         self.run()
     }
@@ -47,9 +54,15 @@ impl VM {
         loop {
             #[cfg(debug_trace_execution)]
             {
-                for v in self.stack.iter() {
-                    println!("{}", v);
-                }
+                println!("GLOBALS: {:?}", self.globals);
+                println!(
+                    "STACK: {}",
+                    self.stack
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                );
                 offset += chunk.disassemble_instruction(self.pos, offset);
             }
             if self.stack.len() > MAX_STACK_SIZE {
@@ -57,13 +70,28 @@ impl VM {
             }
             let ins = &chunk.code[self.pos];
             match ins.op() {
-                Op::Negate => op_negate(&mut self.stack)?,
-                Op::Add => op_add(&mut self.stack)?,
-                Op::Sub => op_sub(&mut self.stack)?,
-                Op::Mul => op_mul(&mut self.stack)?,
-                Op::Div => op_div(&mut self.stack)?,
+                Op::Add => op_add(&mut self.stack, ins.get_operand(0))?,
+                Op::Sub => op_sub(&mut self.stack, ins.get_operand(0))?,
+                Op::Mul => op_mul(&mut self.stack, ins.get_operand(0))?,
+                Op::Div => op_div(&mut self.stack, ins.get_operand(0))?,
+                Op::Pop => {
+                    self.stack.pop().unwrap();
+                }
+                Op::DefGlobal => {
+                    let sym = self.stack.pop().unwrap().to_symbol()?;
+                    let val = self.stack.pop().unwrap();
+                    self.globals.insert(sym, val);
+                    self.stack.push(Value::Nil);
+                }
+                Op::GetGlobal => {
+                    let sym = self.stack.pop().unwrap().to_symbol()?;
+                    match self.globals.get(&sym) {
+                        Some(val) => self.stack.push(val.clone()),
+                        None => return Err(RuntimeError::new("Undefined".to_string()).into()),
+                    }
+                }
                 Op::Return => {
-                    println!("{}", self.stack.pop().expect("stack empty"));
+                    println!("{}", self.stack.pop().unwrap());
                     return Ok(());
                 }
                 Op::Constant => self
@@ -77,7 +105,7 @@ impl VM {
         }
     }
     pub fn reset_stack(&mut self) {
-        self.stack = Vec::with_capacity(INITIAL_STACK_SIZE);
+        self.stack = Vec::with_capacity(INI_STACK_SIZE);
     }
 }
 

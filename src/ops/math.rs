@@ -2,27 +2,45 @@
 use std::str::FromStr;
 
 use crate::error::{Result, RuntimeError};
-use crate::value::{FloatType, IntType, Value};
-use crate::{binary_op, unary_op};
+use crate::value::{FloatType, IntType, TypeError, Value};
+use crate::vararg_op;
 
-unary_op!(op_negate, x, {
-    Number::Int(0).sub(&x.to_number()?)?.to_val()
+vararg_op!(op_add, args, {
+    let mut acc = Number::Int(0);
+    for n in args {
+        acc = acc.add(&n.to_number()?)?;
+    }
+    acc.to_val()
 });
 
-binary_op!(op_add, x, y, {
-    x.to_number()?.add(&y.to_number()?)?.to_val()
+vararg_op!(op_sub, args, {
+    let mut acc = match args.pop() {
+        Some(n) => n.to_number()?,
+        None => return Err(RuntimeError::new("need at least 1 arg".to_string()).into()),
+    };
+    for n in args {
+        acc = acc.sub(&n.to_number()?)?;
+    }
+    acc.to_val()
 });
 
-binary_op!(op_sub, x, y, {
-    x.to_number()?.sub(&y.to_number()?)?.to_val()
+vararg_op!(op_mul, args, {
+    let mut acc = Number::Int(1);
+    for n in args {
+        acc = acc.mul(&n.to_number()?)?;
+    }
+    acc.to_val()
 });
 
-binary_op!(op_mul, x, y, {
-    x.to_number()?.mul(&y.to_number()?)?.to_val()
-});
-
-binary_op!(op_div, x, y, {
-    x.to_number()?.div(&y.to_number()?)?.to_val()
+vararg_op!(op_div, args, {
+    let mut acc = match args.pop() {
+        Some(n) => n.to_number()?,
+        None => return Err(RuntimeError::new("need at least 1 arg".to_string()).into()),
+    };
+    for n in args {
+        acc = acc.div(&n.to_number()?)?;
+    }
+    acc.to_val()
 });
 
 pub enum Number {
@@ -35,6 +53,7 @@ impl Number {
         match val {
             Value::Int(n) => Ok(Self::Int(n)),
             Value::Float(x) => Ok(Self::Float(x)),
+            _ => Err(TypeError::new("number".to_string()).into()),
         }
     }
     pub fn to_val(&self) -> Value {

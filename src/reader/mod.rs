@@ -2,7 +2,9 @@ use std::fmt;
 
 pub mod tokenizer;
 
-pub use tokenizer::{LexError, Token, TokenToIter, TokenValidator, Tokenizer};
+pub use tokenizer::{
+    LexError, Token, TokenProducer, TokenToIter, TokenValidator, TokenValue, Tokenizer,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct PositionTag {
