@@ -34,17 +34,21 @@ struct Opt {
     interactive: bool,
 }
 
+#[cfg(debug_trace_compile)]
 fn printsize<T>(name: &str) {
-    println!("size of jibi2 {}: {} bytes", name, std::mem::size_of::<T>());
+    println!("size of {}: {} bytes", name, std::mem::size_of::<T>());
 }
 
 fn main() {
-    printsize::<bool>("Bool");
-    printsize::<IntType>("Int");
-    printsize::<FloatType>("Float");
-    printsize::<Rc<String>>("Symbol");
-    printsize::<Rc<String>>("String");
-    printsize::<Value>("Value");
+    #[cfg(debug_trace_compile)]
+    {
+        printsize::<bool>("Bool");
+        printsize::<IntType>("Int");
+        printsize::<FloatType>("Float");
+        printsize::<Rc<String>>("Symbol");
+        printsize::<Rc<String>>("String");
+        printsize::<Value>("Value");
+    }
     let Opt { files, interactive } = Opt::from_args();
 
     let mut vm = VM::new();

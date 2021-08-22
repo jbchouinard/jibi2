@@ -62,7 +62,8 @@ lazy_static! {
     static ref RE_KEYWORD: Regex = Regex::new(
         r"(?x)
             ^(
-            def|let|set!
+            def|set!|let|begin
+            |equal\?
             |\+|-|/|\*
             |=|!=|>|>=|<|<=
             |nil|true|false
@@ -362,7 +363,7 @@ mod tests {
             "(* 12 -15)",
             vec![
                 TokenValue::Char('('),
-                TokenValue::Ident("*".to_string()),
+                TokenValue::Keyword("*".to_string()),
                 TokenValue::Int(12),
                 TokenValue::Int(-15),
                 TokenValue::Char(')'),
@@ -427,7 +428,7 @@ mod tests {
             "(* 12.0 -0.5)",
             vec![
                 TokenValue::Char('('),
-                TokenValue::Ident("*".to_string()),
+                TokenValue::Keyword("*".to_string()),
                 TokenValue::Float(12.0),
                 TokenValue::Float(-0.5),
                 TokenValue::Char(')'),

@@ -7,7 +7,7 @@ use crate::ops::math::Number;
 pub type IntType = i64;
 pub type FloatType = f64;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Nil,
     Symbol(Rc<String>),

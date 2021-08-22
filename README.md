@@ -2,10 +2,11 @@
 
 # jibi2
 
-A re-implementation of [jibi](https://github.com/jbchouinard/jibi) with a bytecode
-compiler and stack-based VM interpreter instead of a tree-walk interpreter.
+A re-implementation of [jibi](https://github.com/jbchouinard/jibi) with a stack-based
+bytecode compiler and VM instead of an AST interpreter, so that maybe it won't be
+horribly, horribly slow.
 
-The overall design and some code was inspired by
+The overall design and some of the code was inspired by
 [Crafting Interpreters](https://craftinginterpreters.com),
 however a lot of implementation details are different because of differences between
 Rust and C.

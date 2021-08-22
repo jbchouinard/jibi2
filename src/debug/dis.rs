@@ -13,15 +13,28 @@ impl fmt::Display for Op {
                 Op::Sub => "OP_SUB",
                 Op::Mul => "OP_MUL",
                 Op::Div => "OP_DIV",
+                Op::AddLong => "OP_ADD_LONG",
+                Op::SubLong => "OP_SUB_LONG",
+                Op::MulLong => "OP_MUL_LONG",
+                Op::DivLong => "OP_DIV_LONG",
+                Op::PopR0 => "OP_POP_R0",
+                Op::PushR0 => "OP_PUSH_R0",
                 Op::Pop => "OP_POP",
+                Op::PopN => "OP_POP_N",
                 Op::NumEq => "OP_NUM_EQ",
                 Op::NumNeq => "OP_NUM_NEQ",
                 Op::NumLt => "OP_NUM_LT",
                 Op::NumLte => "OP_NUM_LTE",
                 Op::NumGt => "OP_NUM_GT",
                 Op::NumGte => "OP_NUM_GTE",
+                Op::Equal => "OP_EQUAL",
                 Op::DefGlobal => "OP_DEF_GLOBAL",
                 Op::GetGlobal => "OP_GET_GLOBAL",
+                Op::SetGlobal => "OP_SET_GLOBAL",
+                Op::GetLocal => "OP_GET_LOCAL",
+                Op::GetLocalLong => "OP_GET_LOCAL_LONG",
+                Op::SetLocal => "OP_SET_LOCAL",
+                Op::SetLocalLong => "OP_SET_LOCAL_LONG",
                 Op::Return => "OP_RETURN",
                 Op::Constant => "OP_CONSTANT",
                 Op::ConstantLong => "OP_CONSTANT_LONG",
@@ -65,10 +78,10 @@ impl Chunk {
 
         match ins.op() {
             Op::Constant => {
-                println!("{} ({})", ins, self.constants[ins.get_constant_n()]);
+                println!("{} ({})", ins, self.constants[ins.get_usize()]);
             }
             Op::ConstantLong => {
-                println!("{} ({})", ins, self.constants[ins.get_constant_n()]);
+                println!("{} ({})", ins, self.constants[ins.get_usize()]);
             }
             _ => println!("{}", ins),
         };
@@ -76,8 +89,7 @@ impl Chunk {
     }
 
     pub fn disassemble(&self, name: &str) {
-        println!("=== {} ===", name);
-
+        println!("{:=^48}", format!(" {} ", name));
         let mut prev_offset = 0;
         let mut offset = 0;
         while offset < self.code.len() {
@@ -85,5 +97,6 @@ impl Chunk {
             prev_offset = offset;
             offset = new_offset;
         }
+        println!("{:=^48}", "");
     }
 }

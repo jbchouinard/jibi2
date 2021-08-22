@@ -8,10 +8,11 @@ use crate::reader::{PositionTag, Token, TokenProducer, TokenValue, Tokenizer};
 use crate::value::Value;
 
 pub fn compile_tokens(producer: Box<dyn TokenProducer>, chunk: &mut Chunk) -> Result<()> {
-    let mut compiler = Compiler::new(producer, chunk);
-    compiler.next()?;
-    compiler.expressions()?;
-    compiler.end();
+    let mut compiler = Compiler::new(chunk);
+    let mut parser = Parser::new(&mut compiler, producer);
+    parser.advance()?;
+    parser.parse()?;
+    parser.end();
     Ok(())
 }
 
@@ -20,45 +21,203 @@ pub fn compile_source(filename: &str, source: &str, chunk: &mut Chunk) -> Result
     compile_tokens(Box::new(tokens), chunk)
 }
 
+#[derive(Debug)]
+pub struct Local {
+    name: String,
+    depth: i32,
+}
+
+impl Local {
+    pub fn new(name: String, depth: i32) -> Self {
+        Self { name, depth }
+    }
+}
+
+pub enum Variable {
+    Global,
+    Local(usize),
+}
+
 pub struct Compiler<'a> {
-    producer: Box<dyn TokenProducer>,
-    peek: Token,
     current_chunk: &'a mut Chunk,
+    scope_depth: i32,
+    locals: Vec<Local>,
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(producer: Box<dyn TokenProducer>, chunk: &'a mut Chunk) -> Self {
+    pub fn new(chunk: &'a mut Chunk) -> Self {
+        Self {
+            current_chunk: chunk,
+            scope_depth: 0,
+            locals: Vec::with_capacity(16),
+        }
+    }
+    fn emit_instruction<I: Into<AnyInstruction>>(&mut self, ins: I, lineno: usize) {
+        self.current_chunk.write_instruction(ins, lineno)
+    }
+    fn emit_constant(&mut self, val: Value, lineno: usize) {
+        self.current_chunk.write_constant(val, lineno)
+    }
+    fn define_variable(&mut self, name: String, pos: &PositionTag) -> Result<()> {
+        // Global variable: store in globals
+        if self.scope_depth == 0 {
+            self.emit_constant(Value::Symbol(Rc::new(name)), pos.lineno);
+            self.emit_instruction(instruction_def_global(), pos.lineno);
+            Ok(())
+        }
+        // Local variable: register local, leave value on stack
+        // since locals are saved on the stack, definitions can only happen at the
+        // top of a new local scope
+        else {
+            if self.locals.len() >= u16::MAX.into() {
+                panic!("too many local variables")
+            }
+            for local in self.locals.iter().rev() {
+                if local.depth != -1 && local.depth < self.scope_depth {
+                    break;
+                }
+                if local.name == name {
+                    return Err(SyntaxError::new(
+                        pos.clone(),
+                        format!("cannot re-define local variable {}", name),
+                    )
+                    .into());
+                }
+            }
+            self.locals.push(Local::new(name, self.scope_depth));
+            Ok(())
+        }
+    }
+    fn resolve_variable(&mut self, name: &str) -> Variable {
+        if !self.locals.is_empty() {
+            for i in (0..self.locals.len()).rev() {
+                if self.locals[i].name == name {
+                    return Variable::Local(i);
+                }
+            }
+        }
+        Variable::Global
+    }
+    fn get_variable(&mut self, name: String, lineno: usize) -> Result<()> {
+        let var = self.resolve_variable(&name);
+        match var {
+            Variable::Global => {
+                self.emit_constant(Value::Symbol(Rc::new(name)), lineno);
+                self.emit_instruction(instruction_get_global(), lineno);
+            }
+            Variable::Local(n) => {
+                self.emit_instruction(instruction_get_local(n), lineno);
+            }
+        }
+        Ok(())
+    }
+    fn set_variable(&mut self, name: String, lineno: usize) -> Result<()> {
+        let var = self.resolve_variable(&name);
+        match var {
+            Variable::Global => {
+                self.emit_constant(Value::Symbol(Rc::new(name)), lineno);
+                self.emit_instruction(instruction_set_global(), lineno);
+            }
+            Variable::Local(n) => {
+                self.emit_instruction(instruction_set_local(n), lineno);
+            }
+        }
+        Ok(())
+    }
+    fn begin_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+    fn end_scope(&mut self, lineno: usize) {
+        self.scope_depth -= 1;
+        let mut popped: u8 = 0;
+        while !self.locals.is_empty() && self.locals[self.locals.len() - 1].depth > self.scope_depth
+        {
+            self.locals.pop().unwrap();
+            popped += 1;
+        }
+        if popped > 0 {
+            self.emit_instruction(instruction_pop_n(popped), lineno)
+        }
+    }
+    pub fn end(&mut self, lineno: usize) {
+        self.emit_instruction(instruction_return(), lineno);
+        #[cfg(debug_trace_compile)]
+        self.current_chunk.disassemble("debug_trace_compile");
+    }
+}
+
+pub struct Parser<'a> {
+    producer: Box<dyn TokenProducer>,
+    peek: Token,
+    stashed_next: Option<Token>,
+    compiler: &'a mut Compiler<'a>,
+}
+
+impl<'a> Parser<'a> {
+    pub fn new(compiler: &'a mut Compiler<'a>, producer: Box<dyn TokenProducer>) -> Self {
         Self {
             producer,
             peek: Token::new(TokenValue::None, PositionTag::new("", 1, 0)),
-            current_chunk: chunk,
+            stashed_next: None,
+            compiler,
         }
     }
-    fn next(&mut self) -> Result<Token> {
-        let next = std::mem::replace(&mut self.peek, self.producer.next_token()?);
+    fn advance(&mut self) -> Result<Token> {
+        let stashed_next = std::mem::take(&mut self.stashed_next);
+        let next = match stashed_next {
+            Some(next) => std::mem::replace(&mut self.peek, next),
+            None => std::mem::replace(&mut self.peek, self.producer.next_token()?),
+        };
+        if next.value == TokenValue::Eof {
+            return Err(self.error_at(&next, "reached EOF".to_string()));
+        }
         Ok(next)
+    }
+    fn rewind(&mut self, tok: Token) {
+        if self.stashed_next.is_some() {
+            panic!("cannot rewind more than once");
+        }
+        self.stashed_next = Some(std::mem::replace(&mut self.peek, tok));
     }
     fn expect(&mut self, v: TokenValue) -> Result<Token> {
         if self.peek.value == v {
-            self.next()
+            self.advance()
         } else {
             Err(self.error(format!("expected {}, got {}", v, self.peek.value)))
         }
     }
-    pub fn expressions(&mut self) -> Result<()> {
+    pub fn parse(&mut self) -> Result<()> {
+        // Empty program, return nil
         if self.peek.value == TokenValue::Eof {
             self.emit_constant(Value::Nil);
+            self.emit_instruction(instruction_pop_r0());
         }
-        loop {
-            if self.peek.value == TokenValue::Eof {
-                break Ok(());
-            } else {
-                self.expression()?;
-                if self.peek.value != TokenValue::Eof {
-                    self.emit_instruction(instruction_pop());
-                }
-            }
+        while self.peek.value != TokenValue::Eof {
+            self.top_level_expression()?;
+            self.emit_instruction(instruction_pop_r0());
         }
+        Ok(())
+    }
+    pub fn top_level_expression(&mut self) -> Result<()> {
+        if !self.definition()? {
+            self.expression()?;
+        }
+        Ok(())
+    }
+    pub fn definition(&mut self) -> Result<bool> {
+        let next = self.advance()?;
+        if next.value == TokenValue::Char('(')
+            && self.peek.value == TokenValue::Keyword("def".to_string())
+        {
+            self.advance()?;
+            self.sform_def()?;
+            self.expect(TokenValue::Char(')'))?;
+            // Definitions are expressions, they evaluate to nil
+            self.emit_constant(Value::Nil);
+            return Ok(true);
+        }
+        self.rewind(next);
+        Ok(false)
     }
     pub fn expression(&mut self) -> Result<()> {
         match self.peek.value {
@@ -67,15 +226,12 @@ impl<'a> Compiler<'a> {
         }
     }
     fn atom(&mut self) -> Result<()> {
-        let current = self.next()?;
+        let current = self.advance()?;
         match current.value {
             TokenValue::Int(n) => self.emit_constant(Value::Int(n)),
             TokenValue::Float(x) => self.emit_constant(Value::Float(x)),
             TokenValue::String(s) => self.emit_constant(Value::String(Rc::new(s))),
-            TokenValue::Ident(s) => {
-                self.emit_constant(Value::Symbol(Rc::new(s)));
-                self.emit_instruction(instruction_get_global());
-            }
+            TokenValue::Ident(s) => self.compiler.get_variable(s, self.lineno())?,
             TokenValue::Keyword(k) => self.atom_const(k)?,
             _ => return Err(self.error_at(&current, format!("unexpected {}", current.value))),
         };
@@ -86,7 +242,7 @@ impl<'a> Compiler<'a> {
             "nil" => self.emit_constant(Value::Nil),
             "true" => self.emit_constant(Value::Bool(true)),
             "false" => self.emit_constant(Value::Bool(false)),
-            _ => return Err(self.error(format!("invalid special form {}", sym))),
+            _ => return Err(self.error(format!("ill-formed special form {}", sym))),
         }
         Ok(())
     }
@@ -101,7 +257,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
     fn ident(&mut self) -> Result<String> {
-        let current = self.next()?;
+        let current = self.advance()?;
         let ident = match current.value {
             TokenValue::Ident(s) => s,
             _ => {
@@ -113,13 +269,17 @@ impl<'a> Compiler<'a> {
         Ok(ident)
     }
     fn special_form(&mut self) -> Result<()> {
-        let current = self.next()?;
+        let current = self.advance()?;
         let keyword = match current.value {
             TokenValue::Keyword(k) => k,
             _ => panic!("expected keyword"),
         };
         match &keyword[..] {
-            "def" => self.sform_def()?,
+            "def" => return Err(self.error("ill-placed def".to_string())),
+            "begin" => self.sform_begin()?,
+            "set!" => self.sform_set()?,
+            "let" => self.sform_let()?,
+            "equal?" => self.sform_equal()?,
             "+" => self.sform_arith(keyword)?,
             "-" => self.sform_arith(keyword)?,
             "*" => self.sform_arith(keyword)?,
@@ -130,19 +290,68 @@ impl<'a> Compiler<'a> {
             "<=" => self.sform_numcmp(keyword)?,
             ">" => self.sform_numcmp(keyword)?,
             ">=" => self.sform_numcmp(keyword)?,
-            _ => panic!("invalid keyword"),
+            _ => return Err(self.error(format!("invalid special form keyword {}", keyword))),
         }
         Ok(())
     }
     fn sform_def(&mut self) -> Result<()> {
         let ident = self.ident()?;
         self.expression()?;
-        self.emit_constant(Value::Symbol(Rc::new(ident)));
-        self.emit_instruction(instruction_def_global());
+        self.compiler.define_variable(ident, &self.peek.pos)?;
+        Ok(())
+    }
+    fn sform_set(&mut self) -> Result<()> {
+        let ident = self.ident()?;
+        self.expression()?;
+        self.compiler.set_variable(ident, self.peek.pos.lineno)?;
+        Ok(())
+    }
+    fn sform_equal(&mut self) -> Result<()> {
+        self.expression()?;
+        self.expression()?;
+        self.emit_instruction(instruction_equal());
+        Ok(())
+    }
+    fn sform_let(&mut self) -> Result<()> {
+        self.compiler.begin_scope();
+        self.expect(TokenValue::Char('('))?;
+        while self.peek.value != TokenValue::Char(')') {
+            self.expect(TokenValue::Char('('))?;
+            let ident = self.ident()?;
+            self.expression()?;
+            self.compiler.define_variable(ident, &self.peek.pos)?;
+            self.expect(TokenValue::Char(')'))?;
+        }
+        self.expect(TokenValue::Char(')'))?;
+        while self.peek.value != TokenValue::Char(')') {
+            self.expression()?;
+            self.emit_instruction(instruction_pop_r0());
+        }
+        self.compiler.end_scope(self.lineno());
+        self.emit_instruction(instruction_push_r0());
+        Ok(())
+    }
+    fn sform_begin(&mut self) -> Result<()> {
+        // (begin): don't even bother, just return nil
+        if self.peek.value == TokenValue::Char(')') {
+            self.emit_constant(Value::Nil);
+            return Ok(());
+        }
+        // Save value of last expression in register, push it back at the end
+        self.compiler.begin_scope();
+        while self.definition()? {
+            self.emit_instruction(instruction_pop_r0());
+        }
+        while self.peek.value != TokenValue::Char(')') {
+            self.expression()?;
+            self.emit_instruction(instruction_pop_r0());
+        }
+        self.compiler.end_scope(self.peek.pos.lineno);
+        self.emit_instruction(instruction_push_r0());
         Ok(())
     }
     fn sform_arith(&mut self, op: String) -> Result<()> {
-        let mut nargs: u8 = 0;
+        let mut nargs: usize = 0;
         while self.peek.value != TokenValue::Char(')') {
             self.expression()?;
             nargs += 1;
@@ -170,23 +379,23 @@ impl<'a> Compiler<'a> {
         });
         Ok(())
     }
-    pub fn end(&mut self) {
-        self.emit_instruction(instruction_return());
-        #[cfg(debug_trace_compile)]
-        self.current_chunk.disassemble("code");
-    }
-    fn emit_instruction<const N: usize>(&mut self, ins: Instruction<N>) {
-        self.current_chunk
-            .write_instruction(ins, self.peek.pos.lineno)
-    }
-    fn emit_constant(&mut self, val: Value) {
-        self.current_chunk.write_constant(val, self.peek.pos.lineno)
-    }
     fn error_at(&self, tok: &Token, reason: String) -> Error {
         SyntaxError::new(tok.pos.clone(), reason).into()
     }
     fn error(&self, reason: String) -> Error {
         self.error_at(&self.peek, reason)
+    }
+    pub fn lineno(&self) -> usize {
+        self.peek.pos.lineno
+    }
+    fn emit_instruction<I: Into<AnyInstruction>>(&mut self, ins: I) {
+        self.compiler.emit_instruction(ins, self.lineno())
+    }
+    fn emit_constant(&mut self, val: Value) {
+        self.compiler.emit_constant(val, self.lineno())
+    }
+    pub fn end(&mut self) {
+        self.compiler.end(self.peek.pos.lineno)
     }
 }
 
