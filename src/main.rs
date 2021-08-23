@@ -40,14 +40,16 @@ fn printsize<T>(name: &str) {
 fn main() {
     #[cfg(debug_trace_compile)]
     {
-        use jibi2::value::{FloatType, IntType, Value};
+        use jibi2::object::{FloatType, Function, IntType, Object};
         use std::rc::Rc;
         printsize::<bool>("Bool");
         printsize::<IntType>("Int");
         printsize::<FloatType>("Float");
-        printsize::<Rc<String>>("Symbol");
-        printsize::<Rc<String>>("String");
-        printsize::<Value>("Value");
+        printsize::<String>("String");
+        printsize::<Rc<String>>("StringRef");
+        printsize::<Function>("Function");
+        printsize::<Box<Function>>("FunctionRef");
+        printsize::<Object>("Value");
     }
     let Opt { files, interactive } = Opt::from_args();
 
@@ -77,7 +79,7 @@ fn repl(vm: &mut VM) {
     loop {
         match get_tokens(&mut rl) {
             Ok(tokens) => match vm.interpret_tokens(Box::new(tokens.into_iter())) {
-                Ok(()) => (),
+                Ok(()) => println!("{}", vm.register0.take().unwrap()),
                 Err(e) => eprintln!("{}", e),
             },
             Err(e) => eprintln!("{}", e),

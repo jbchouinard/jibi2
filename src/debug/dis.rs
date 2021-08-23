@@ -91,10 +91,10 @@ impl Chunk {
         newpos
     }
 
-    pub fn disassemble(&self, name: &str) {
+    pub fn disassemble(&self, name: &str, starting_offset: usize) {
         println!("{:=^48}", format!(" {} ", name));
-        let mut prev_offset = 0;
-        let mut offset = 0;
+        let mut prev_offset = starting_offset;
+        let mut offset = starting_offset;
         while offset < self.code.len() {
             let new_offset = self.disassemble_instruction(prev_offset, offset);
             prev_offset = offset;

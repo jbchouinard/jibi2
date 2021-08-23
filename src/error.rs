@@ -1,8 +1,8 @@
 use std::fmt;
 
 pub use crate::compiler::SyntaxError;
+pub use crate::object::TypeError;
 pub use crate::reader::tokenizer::LexError;
-pub use crate::value::TypeError;
 pub use crate::vm::RuntimeError;
 
 #[derive(Debug)]

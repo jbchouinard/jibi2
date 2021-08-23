@@ -2,7 +2,7 @@
 use std::str::FromStr;
 
 use crate::error::{Result, RuntimeError};
-use crate::value::{FloatType, IntType, TypeError, Value};
+use crate::object::{FloatType, IntType, Object, TypeError};
 use crate::{binary_op, vararg_op};
 
 vararg_op!(op_add, args, {
@@ -44,27 +44,27 @@ vararg_op!(op_div, args, {
 });
 
 binary_op!(op_num_eq, x, y, {
-    Value::Bool(x.to_number()?.eq(&y.to_number()?)?)
+    Object::Bool(x.to_number()?.eq(&y.to_number()?)?)
 });
 
 binary_op!(op_num_neq, x, y, {
-    Value::Bool(x.to_number()?.neq(&y.to_number()?)?)
+    Object::Bool(x.to_number()?.neq(&y.to_number()?)?)
 });
 
 binary_op!(op_num_lt, x, y, {
-    Value::Bool(x.to_number()?.lt(&y.to_number()?)?)
+    Object::Bool(x.to_number()?.lt(&y.to_number()?)?)
 });
 
 binary_op!(op_num_lte, x, y, {
-    Value::Bool(x.to_number()?.lte(&y.to_number()?)?)
+    Object::Bool(x.to_number()?.lte(&y.to_number()?)?)
 });
 
 binary_op!(op_num_gt, x, y, {
-    Value::Bool(x.to_number()?.gte(&y.to_number()?)?)
+    Object::Bool(x.to_number()?.gte(&y.to_number()?)?)
 });
 
 binary_op!(op_num_gte, x, y, {
-    Value::Bool(x.to_number()?.gte(&y.to_number()?)?)
+    Object::Bool(x.to_number()?.gte(&y.to_number()?)?)
 });
 
 pub enum Number {
@@ -73,17 +73,17 @@ pub enum Number {
 }
 
 impl Number {
-    pub fn from_val(val: Value) -> Result<Self> {
+    pub fn from_val(val: Object) -> Result<Self> {
         match val {
-            Value::Int(n) => Ok(Self::Int(n)),
-            Value::Float(x) => Ok(Self::Float(x)),
+            Object::Int(n) => Ok(Self::Int(n)),
+            Object::Float(x) => Ok(Self::Float(x)),
             _ => Err(TypeError::new("number".to_string()).into()),
         }
     }
-    pub fn to_val(&self) -> Value {
+    pub fn to_val(&self) -> Object {
         match self {
-            Self::Int(n) => Value::Int(*n),
-            Self::Float(x) => Value::Float(*x),
+            Self::Int(n) => Object::Int(*n),
+            Self::Float(x) => Object::Float(*x),
         }
     }
     fn as_float(&self) -> Result<FloatType> {

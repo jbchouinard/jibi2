@@ -3,8 +3,8 @@ use std::fmt;
 use lazy_static::lazy_static;
 use regex::Regex;
 
+use crate::object::{FloatType, IntType};
 use crate::reader::PositionTag;
-use crate::value::{FloatType, IntType};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenValue {
@@ -62,11 +62,9 @@ lazy_static! {
     static ref RE_KEYWORD: Regex = Regex::new(
         r"(?x)
             ^(
-            def|set!|let|begin
-            |if|equal\?
-            |\+|-|/|\*
-            |=|!=|>|>=|<|<=
+            def|set!|begin|let|if|cond|equal\?
             |nil|true|false
+            |\+|-|/|\*|=|!=|>|>=|<|<=
             )
         "
     )

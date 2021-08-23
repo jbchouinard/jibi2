@@ -237,6 +237,37 @@ impl AnyInstruction {
             _ => panic!("not a constant"),
         }
     }
+    pub fn is_static(&self) -> bool {
+        matches!(
+            self.op(),
+            Op::Pop
+                | Op::PopN
+                | Op::PushR0
+                | Op::PopR0
+                | Op::Constant
+                | Op::ConstantLong
+                | Op::Equal
+                | Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::AddLong
+                | Op::SubLong
+                | Op::MulLong
+                | Op::DivLong
+                | Op::NumEq
+                | Op::NumNeq
+                | Op::NumLt
+                | Op::NumLte
+                | Op::NumGt
+                | Op::NumGte
+                // TODO: Check that jump is within bounds of expression, otherwise
+                // not static
+                | Op::Jump
+                | Op::JumpTrue
+                | Op::JumpFalse
+        )
+    }
     pub fn read(code: &[u8], pos: usize) -> (Self, usize) {
         use AnyInstruction::*;
         let opcode = code[pos];

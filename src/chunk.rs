@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::instruction::*;
-use crate::value::{IntType, Value};
+use crate::object::{IntType, Object};
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Chunk {
     pub code: Vec<u8>,
     pub lines: Vec<usize>,
-    pub constants: Vec<Value>,
+    pub constants: Vec<Object>,
     pub constants_map: HashMap<ConstKey, usize>,
 }
 
@@ -58,8 +59,14 @@ impl Chunk {
         }
         start
     }
+    pub fn erase(&mut self, to_len: usize) {
+        if to_len > self.code.len() {
+            panic!("not that long");
+        }
+        self.code.resize(to_len, 0);
+    }
 
-    pub fn add_constant(&mut self, val: Value) -> usize {
+    pub fn add_constant(&mut self, val: Object) -> usize {
         let key = ConstKey::from_val(&val);
         match key {
             Some(key) => match self.constants_map.entry(key) {
@@ -77,13 +84,13 @@ impl Chunk {
             }
         }
     }
-    pub fn write_constant(&mut self, val: Value, line: usize) -> usize {
+    pub fn write_constant(&mut self, val: Object, line: usize) -> usize {
         let n = self.add_constant(val);
         self.write_instruction(instruction_constant(n), line)
     }
 }
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ConstKey {
     Nil,
     Bool(bool),
@@ -93,13 +100,13 @@ pub enum ConstKey {
 }
 
 impl ConstKey {
-    pub fn from_val(val: &Value) -> Option<Self> {
+    pub fn from_val(val: &Object) -> Option<Self> {
         match val {
-            Value::Nil => Some(Self::Nil),
-            Value::Bool(b) => Some(Self::Bool(*b)),
-            Value::Symbol(ref s) => Some(Self::Str(s.to_string())),
-            Value::String(ref s) => Some(Self::Sym(s.to_string())),
-            Value::Int(n) => Some(Self::Int(*n)),
+            Object::Nil => Some(Self::Nil),
+            Object::Bool(b) => Some(Self::Bool(*b)),
+            Object::Symbol(ref s) => Some(Self::Str(s.to_string())),
+            Object::String(ref s) => Some(Self::Sym(s.to_string())),
+            Object::Int(n) => Some(Self::Int(*n)),
             _ => None,
         }
     }

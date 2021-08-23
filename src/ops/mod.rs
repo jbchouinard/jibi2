@@ -1,4 +1,4 @@
-use crate::value::Value;
+use crate::object::Object;
 
 pub mod math;
 
@@ -9,7 +9,7 @@ macro_rules! vararg_op {
     ($name:ident, $args:ident, $b:block) => {
         #[inline(always)]
         pub fn $name(stack: &mut $crate::vm::Stack, nargs: usize) -> crate::error::Result<()> {
-            let mut $args: Vec<Value> = vec![];
+            let mut $args: Vec<Object> = vec![];
             for _ in 0..nargs {
                 $args.push(stack.pop().unwrap());
             }
@@ -32,4 +32,4 @@ macro_rules! binary_op {
     };
 }
 
-binary_op!(op_equal, x, y, { Value::Bool(x == y) });
+binary_op!(op_equal, x, y, { Object::Bool(x == y) });

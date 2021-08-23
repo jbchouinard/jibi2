@@ -1,42 +1,42 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;
+use std::rc::Rc;
 use std::str::FromStr;
 
-use crate::chunk::Chunk;
-use crate::compiler::{compile_source, compile_tokens};
+use crate::compiler::{compile_source, compile_tokens, FunctionType};
 use crate::error::Result;
 use crate::instruction::{AnyInstruction, Op};
+use crate::object::{FunctionRef, Object};
 use crate::ops::*;
 use crate::reader::TokenProducer;
-use crate::value::Value;
 
-pub type Stack = Vec<Value>;
+// TODO: use fixed sized arrays to avoid heap allocations
+pub type Stack = Vec<Object>;
+pub type CallStack = Vec<CallFrame>;
 
 const INI_STACK_SIZE: usize = 32;
 const MAX_STACK_SIZE: usize = 16 * 1024;
 
 pub struct VM {
-    chunk: Option<Chunk>,
-    ip: usize,
-    stack: Stack,
-    globals: HashMap<String, Value>,
-    register0: Option<Value>,
+    pub register0: Option<Object>,
+    pub stack: Stack,
+    pub frames: CallStack,
+    pub globals: HashMap<String, Object>,
 }
 
 impl VM {
     pub fn new() -> Self {
         Self {
-            chunk: None,
-            ip: 0,
             stack: Vec::with_capacity(INI_STACK_SIZE),
             register0: None,
             globals: HashMap::new(),
+            frames: vec![],
         }
     }
-    pub fn interpret(&mut self, code: Chunk) -> Result<()> {
-        self.chunk = Some(code);
-        self.ip = 0;
+    pub fn interpret(&mut self, function: FunctionRef) -> Result<()> {
+        self.stack.push(Object::Function(Rc::clone(&function)));
+        self.frames.push(CallFrame::new(Rc::clone(&function), 0, 0));
         let res = self.run();
         if res.is_err() {
             self.clear_stack();
@@ -44,23 +44,31 @@ impl VM {
         res
     }
     pub fn interpret_source(&mut self, filename: &str, source: &str) -> Result<()> {
-        let mut chunk = Chunk::new();
-        compile_source(filename, source, &mut chunk)?;
-        self.interpret(chunk)
+        let function = compile_source(filename, source, FunctionType::Script)?;
+        self.interpret(function)
     }
     pub fn interpret_tokens(&mut self, producer: Box<dyn TokenProducer>) -> Result<()> {
-        let mut chunk = Chunk::new();
-        compile_tokens(producer, &mut chunk)?;
-        self.interpret(chunk)
+        let function = compile_tokens(producer, FunctionType::Script)?;
+        self.interpret(function)
     }
-    fn peek(&self, n: usize) -> &Value {
+    fn peek(&self, n: usize) -> &Object {
         &self.stack[self.stack.len() - 1 - n]
     }
     fn clear_stack(&mut self) {
         self.stack = Vec::with_capacity(INI_STACK_SIZE);
     }
     pub fn run(&mut self) -> Result<()> {
-        let chunk = self.chunk.as_ref().unwrap();
+        macro_rules! frame {
+            () => {
+                self.frames.last().unwrap()
+            };
+        }
+        macro_rules! mutframe {
+            () => {
+                self.frames.last_mut().unwrap()
+            };
+        }
+
         loop {
             if self.stack.len() > MAX_STACK_SIZE {
                 panic!("stack too large");
@@ -69,30 +77,23 @@ impl VM {
             #[cfg(debug_trace_execution)]
             self.trace_execution(chunk);
 
-            let (ins, mut newpos) = AnyInstruction::read(&chunk.code, self.ip);
+            let (ins, mut newpos) =
+                AnyInstruction::read(&frame!().function.borrow().code.code, frame!().ip);
             match ins.op() {
                 Op::Jump => {
                     let offset = ins.get_usize();
                     newpos += offset;
                 }
-                Op::JumpTrue => match self.peek(0) {
-                    Value::Bool(b) => {
-                        if *b {
-                            let offset = ins.get_usize();
-                            newpos += offset;
-                        }
+                Op::JumpTrue => {
+                    if self.peek(0).as_bool()? {
+                        newpos += ins.get_usize();
                     }
-                    _ => return Err(RuntimeError::new("expected a bool".to_string()).into()),
-                },
-                Op::JumpFalse => match self.peek(0) {
-                    Value::Bool(b) => {
-                        if !*b {
-                            let offset = ins.get_usize();
-                            newpos += offset;
-                        }
+                }
+                Op::JumpFalse => {
+                    if !self.peek(0).as_bool()? {
+                        newpos += ins.get_usize();
                     }
-                    _ => return Err(RuntimeError::new("expected a bool".to_string()).into()),
-                },
+                }
                 Op::Add | Op::AddLong => op_add(&mut self.stack, ins.get_usize())?,
                 Op::Sub | Op::SubLong => op_sub(&mut self.stack, ins.get_usize())?,
                 Op::Mul | Op::MulLong => op_mul(&mut self.stack, ins.get_usize())?,
@@ -117,12 +118,12 @@ impl VM {
                     }
                 }
                 Op::DefGlobal => {
-                    let sym = self.stack.pop().unwrap().to_symbol()?;
+                    let sym = self.stack.pop().unwrap().as_symbol()?.to_string();
                     let val = self.stack.pop().unwrap();
                     self.globals.insert(sym, val);
                 }
                 Op::GetGlobal => {
-                    let sym = self.stack.pop().unwrap().to_symbol()?;
+                    let sym = self.stack.pop().unwrap().as_symbol()?.to_string();
                     match self.globals.get(&sym) {
                         Some(val) => self.stack.push(val.clone()),
                         None => {
@@ -131,44 +132,42 @@ impl VM {
                     }
                 }
                 Op::SetGlobal => {
-                    let sym = self.stack.pop().unwrap().to_symbol()?;
+                    let sym = self.stack.pop().unwrap().as_symbol()?.to_string();
                     let val = self.stack.pop().unwrap();
                     match self.globals.get(&sym) {
                         Some(_) => {
                             self.globals.insert(sym, val);
-                            self.stack.push(Value::Nil)
                         }
                         None => {
                             return Err(RuntimeError::new(format!("Undefined name {}", sym)).into())
                         }
                     }
                 }
-                Op::GetLocal | Op::GetLocalLong => {
-                    self.stack.push(self.stack[ins.get_usize()].clone())
-                }
+                Op::GetLocal | Op::GetLocalLong => self
+                    .stack
+                    .push(self.stack[frame!().fp + ins.get_usize()].clone()),
                 Op::SetLocal | Op::SetLocalLong => {
                     let val = self.stack.pop().unwrap();
-                    self.stack[ins.get_usize()] = val;
-                    self.stack.push(Value::Nil)
+                    self.stack[frame!().fp + ins.get_usize()] = val;
+                    self.stack.push(Object::Nil)
                 }
-                Op::Constant | Op::ConstantLong => {
-                    self.stack.push(chunk.constants[ins.get_usize()].clone())
-                }
+                Op::Constant | Op::ConstantLong => self
+                    .stack
+                    .push(frame!().function.borrow().code.constants[ins.get_usize()].clone()),
                 Op::Return => {
-                    println!("{}", self.register0.as_ref().unwrap());
                     return Ok(());
                 }
             }
-            self.ip = newpos;
+            mutframe!().ip = newpos;
         }
     }
     pub fn reset_stack(&mut self) {
         self.stack = Vec::with_capacity(INI_STACK_SIZE);
     }
     #[cfg(debug_trace_execution)]
-    fn trace_execution(&self, chunk: &Chunk) {
+    fn trace_execution(&self, frame: &CallFrame) {
         println!("------------------------------------------------");
-        println!("IP: {}", self.ip);
+        println!("IP: {}", frame.ip);
         println!("GLOBALS: {:?}", self.globals);
         print!("REGISTER0: {:?}", self.register0);
         println!(
@@ -180,6 +179,18 @@ impl VM {
                 .join(" ")
         );
         chunk.disassemble_instruction(self.ip, self.ip);
+    }
+}
+
+pub struct CallFrame {
+    function: FunctionRef,
+    ip: usize,
+    fp: usize,
+}
+
+impl CallFrame {
+    pub fn new(function: FunctionRef, ip: usize, fp: usize) -> Self {
+        Self { function, ip, fp }
     }
 }
 
