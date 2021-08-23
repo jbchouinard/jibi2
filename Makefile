@@ -15,7 +15,9 @@ install:
 	install -m 755 target/release/jibi2 $(PREFIX)/bin/
 
 test:
+	cargo clippy
 	cargo test
+	cargo run -- tests/*.jibi
 
 clean:
 	cargo clean

@@ -10,11 +10,11 @@ pub type FloatType = f64;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Nil,
+    Bool(bool),
     Symbol(Rc<String>),
     String(Rc<String>),
     Int(IntType),
     Float(FloatType),
-    Bool(bool),
 }
 
 impl fmt::Display for Value {

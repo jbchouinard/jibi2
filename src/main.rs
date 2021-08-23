@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::str::FromStr;
 
 use home::home_dir;
@@ -8,7 +7,6 @@ use rustyline::Editor;
 use structopt::StructOpt;
 
 use jibi2::reader::{LexError, Token, TokenValidator};
-use jibi2::value::{FloatType, IntType, Value};
 use jibi2::vm::VM;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -42,6 +40,8 @@ fn printsize<T>(name: &str) {
 fn main() {
     #[cfg(debug_trace_compile)]
     {
+        use jibi2::value::{FloatType, IntType, Value};
+        use std::rc::Rc;
         printsize::<bool>("Bool");
         printsize::<IntType>("Int");
         printsize::<FloatType>("Float");

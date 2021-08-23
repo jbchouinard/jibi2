@@ -31,6 +31,9 @@ pub enum Op {
     NumLte,
     NumGt,
     NumGte,
+    Jump,
+    JumpTrue,
+    JumpFalse,
 }
 
 impl Op {
@@ -68,6 +71,9 @@ impl Op {
             n if n == Op::NumGt as u8 => Op::NumGt,
             n if n == Op::NumGte as u8 => Op::NumGte,
             n if n == Op::Equal as u8 => Op::Equal,
+            n if n == Op::Jump as u8 => Op::Jump,
+            n if n == Op::JumpTrue as u8 => Op::JumpTrue,
+            n if n == Op::JumpFalse as u8 => Op::JumpFalse,
             _ => panic!("invalid opcode {}", n),
         }
     }
@@ -92,16 +98,16 @@ impl Instruction<1> {
 
 impl Instruction<2> {
     pub fn get_long_usize(&self) -> usize {
-        ((self.operands[0] as usize) * (u8::MAX as usize)) + (self.operands[1] as usize)
+        read_long_operands(&self.operands[0..2]) as usize
     }
 }
 
-fn make_long_operands(n: u16) -> [u8; 2] {
-    [(n / (u8::MAX as u16)) as u8, (n % (u8::MAX as u16)) as u8]
+pub fn make_long_operands(n: u16) -> [u8; 2] {
+    [((n >> 8) & 0xff) as u8, (n & 0xff) as u8]
 }
 
 fn read_long_operands(operands: &[u8]) -> u16 {
-    (u8::MAX as u16 * operands[0] as u16) + (operands[1] as u16)
+    (operands[0] as u16) << 8 | (operands[1] as u16)
 }
 
 macro_rules! instruction_simple {
@@ -176,6 +182,9 @@ instruction_long!(instruction_constant_long, Op::ConstantLong);
 instruction_var!(instruction_constant, Op::Constant, Op::ConstantLong);
 instruction_simple!(instruction_return, Op::Return);
 instruction_simple!(instruction_equal, Op::Equal);
+instruction_long!(instruction_jump, Op::Jump);
+instruction_long!(instruction_jump_if_true, Op::JumpTrue);
+instruction_long!(instruction_jump_if_false, Op::JumpFalse);
 
 macro_rules! op0 {
     ($f:ident, $c:expr, $p:expr) => {
@@ -262,6 +271,9 @@ impl AnyInstruction {
             Op::Constant => op1!(instruction_constant_short, code, pos),
             Op::ConstantLong => op2!(instruction_constant_long, code, pos),
             Op::Return => op0!(instruction_return, code, pos),
+            Op::Jump => op2!(instruction_jump, code, pos),
+            Op::JumpTrue => op2!(instruction_jump_if_true, code, pos),
+            Op::JumpFalse => op2!(instruction_jump_if_false, code, pos),
         }
     }
 }

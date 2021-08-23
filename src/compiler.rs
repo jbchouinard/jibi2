@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::fmt;
 use std::rc::Rc;
 
@@ -53,10 +54,23 @@ impl<'a> Compiler<'a> {
         }
     }
     fn emit_instruction<I: Into<AnyInstruction>>(&mut self, ins: I, lineno: usize) {
-        self.current_chunk.write_instruction(ins, lineno)
+        self.current_chunk.write_instruction(ins, lineno);
     }
     fn emit_constant(&mut self, val: Value, lineno: usize) {
-        self.current_chunk.write_constant(val, lineno)
+        self.current_chunk.write_constant(val, lineno);
+    }
+    fn emit_jump(&mut self, op: Op, lineno: usize) -> usize {
+        self.current_chunk
+            .write_instruction(Instruction::new(op, [0xff, 0xff]), lineno)
+    }
+    fn patch_jump(&mut self, jmp: usize) {
+        let loc = self.current_chunk.count() as usize - jmp - 3;
+        if loc > u16::MAX as usize {
+            panic!("jump offset too large");
+        }
+        let [b1, b2] = make_long_operands(loc.try_into().unwrap());
+        self.current_chunk.write_at(jmp + 1, b1);
+        self.current_chunk.write_at(jmp + 2, b2);
     }
     fn define_variable(&mut self, name: String, pos: &PositionTag) -> Result<()> {
         // Global variable: store in globals
@@ -134,6 +148,10 @@ impl<'a> Compiler<'a> {
         {
             self.locals.pop().unwrap();
             popped += 1;
+            if popped == u8::MAX {
+                self.emit_instruction(instruction_pop_n(popped), lineno);
+                popped = 0;
+            }
         }
         if popped > 0 {
             self.emit_instruction(instruction_pop_n(popped), lineno)
@@ -279,6 +297,7 @@ impl<'a> Parser<'a> {
             "begin" => self.sform_begin()?,
             "set!" => self.sform_set()?,
             "let" => self.sform_let()?,
+            "if" => self.sform_if()?,
             "equal?" => self.sform_equal()?,
             "+" => self.sform_arith(keyword)?,
             "-" => self.sform_arith(keyword)?,
@@ -348,6 +367,18 @@ impl<'a> Parser<'a> {
         }
         self.compiler.end_scope(self.peek.pos.lineno);
         self.emit_instruction(instruction_push_r0());
+        Ok(())
+    }
+    fn sform_if(&mut self) -> Result<()> {
+        self.expression()?;
+        let to_else = self.compiler.emit_jump(Op::JumpFalse, self.lineno());
+        self.emit_instruction(instruction_pop());
+        self.expression()?;
+        let to_end = self.compiler.emit_jump(Op::Jump, self.lineno());
+        self.compiler.patch_jump(to_else);
+        self.emit_instruction(instruction_pop());
+        self.expression()?;
+        self.compiler.patch_jump(to_end);
         Ok(())
     }
     fn sform_arith(&mut self, op: String) -> Result<()> {

@@ -53,6 +53,9 @@ impl VM {
         compile_tokens(producer, &mut chunk)?;
         self.interpret(chunk)
     }
+    fn peek(&self, n: usize) -> &Value {
+        &self.stack[self.stack.len() - 1 - n]
+    }
     fn clear_stack(&mut self) {
         self.stack = Vec::with_capacity(INI_STACK_SIZE);
     }
@@ -66,8 +69,30 @@ impl VM {
             #[cfg(debug_trace_execution)]
             self.trace_execution(chunk);
 
-            let (ins, newpos) = AnyInstruction::read(&chunk.code, self.ip);
+            let (ins, mut newpos) = AnyInstruction::read(&chunk.code, self.ip);
             match ins.op() {
+                Op::Jump => {
+                    let offset = ins.get_usize();
+                    newpos += offset;
+                }
+                Op::JumpTrue => match self.peek(0) {
+                    Value::Bool(b) => {
+                        if *b {
+                            let offset = ins.get_usize();
+                            newpos += offset;
+                        }
+                    }
+                    _ => return Err(RuntimeError::new("expected a bool".to_string()).into()),
+                },
+                Op::JumpFalse => match self.peek(0) {
+                    Value::Bool(b) => {
+                        if !*b {
+                            let offset = ins.get_usize();
+                            newpos += offset;
+                        }
+                    }
+                    _ => return Err(RuntimeError::new("expected a bool".to_string()).into()),
+                },
                 Op::Add | Op::AddLong => op_add(&mut self.stack, ins.get_usize())?,
                 Op::Sub | Op::SubLong => op_sub(&mut self.stack, ins.get_usize())?,
                 Op::Mul | Op::MulLong => op_mul(&mut self.stack, ins.get_usize())?,
@@ -143,6 +168,7 @@ impl VM {
     #[cfg(debug_trace_execution)]
     fn trace_execution(&self, chunk: &Chunk) {
         println!("------------------------------------------------");
+        println!("IP: {}", self.ip);
         println!("GLOBALS: {:?}", self.globals);
         print!("REGISTER0: {:?}", self.register0);
         println!(

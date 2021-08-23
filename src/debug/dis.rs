@@ -38,6 +38,9 @@ impl fmt::Display for Op {
                 Op::Return => "OP_RETURN",
                 Op::Constant => "OP_CONSTANT",
                 Op::ConstantLong => "OP_CONSTANT_LONG",
+                Op::Jump => "OP_JUMP",
+                Op::JumpTrue => "OP_JUMP_IF_TRUE",
+                Op::JumpFalse => "OP_JUMP_IF_FALSE",
             }
         )
     }

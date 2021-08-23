@@ -63,7 +63,7 @@ lazy_static! {
         r"(?x)
             ^(
             def|set!|let|begin
-            |equal\?
+            |if|equal\?
             |\+|-|/|\*
             |=|!=|>|>=|<|<=
             |nil|true|false
