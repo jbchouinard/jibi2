@@ -5,17 +5,11 @@ use std::hash::Hash;
 use crate::instruction::*;
 use crate::value::{IntType, Value};
 
-const CONST_NIL: usize = 0;
-const CONST_TRUE: usize = 1;
-const CONST_FALSE: usize = 2;
-
 pub struct Chunk {
     pub code: Vec<u8>,
     pub lines: Vec<usize>,
     pub constants: Vec<Value>,
-    pub const_str_map: HashMap<String, usize>,
-    pub const_sym_map: HashMap<String, usize>,
-    pub const_int_map: HashMap<IntType, usize>,
+    pub constants_map: HashMap<ConstKey, usize>,
 }
 
 impl Chunk {
@@ -23,10 +17,8 @@ impl Chunk {
         Self {
             code: vec![],
             lines: vec![0],
-            constants: vec![Value::Nil, Value::Bool(true), Value::Bool(false)],
-            const_str_map: HashMap::new(),
-            const_sym_map: HashMap::new(),
-            const_int_map: HashMap::new(),
+            constants: vec![],
+            constants_map: HashMap::new(),
         }
     }
     pub fn count(&self) -> usize {
@@ -66,43 +58,20 @@ impl Chunk {
         }
         start
     }
-    fn reuse_constant<T: Eq + Hash>(
-        constants: &mut Vec<Value>,
-        map: &mut HashMap<T, usize>,
-        key: T,
-        val: Value,
-    ) -> usize {
-        match map.entry(key) {
-            Entry::Vacant(e) => {
-                constants.push(val);
-                let i = constants.len() - 1;
-                e.insert(i);
-                i
-            }
-            Entry::Occupied(e) => *e.get(),
-        }
-    }
+
     pub fn add_constant(&mut self, val: Value) -> usize {
-        match val {
-            Value::Nil => CONST_NIL,
-            Value::Bool(true) => CONST_TRUE,
-            Value::Bool(false) => CONST_FALSE,
-            Value::Int(n) => {
-                Self::reuse_constant(&mut self.constants, &mut self.const_int_map, n, val)
-            }
-            Value::String(ref s) => Self::reuse_constant(
-                &mut self.constants,
-                &mut self.const_str_map,
-                s.to_string(),
-                val,
-            ),
-            Value::Symbol(ref s) => Self::reuse_constant(
-                &mut self.constants,
-                &mut self.const_sym_map,
-                s.to_string(),
-                val,
-            ),
-            _ => {
+        let key = ConstKey::from_val(&val);
+        match key {
+            Some(key) => match self.constants_map.entry(key) {
+                Entry::Vacant(e) => {
+                    self.constants.push(val);
+                    let i = self.constants.len() - 1;
+                    e.insert(i);
+                    i
+                }
+                Entry::Occupied(e) => *e.get(),
+            },
+            None => {
                 self.constants.push(val);
                 self.constants.len() - 1
             }
@@ -111,5 +80,27 @@ impl Chunk {
     pub fn write_constant(&mut self, val: Value, line: usize) -> usize {
         let n = self.add_constant(val);
         self.write_instruction(instruction_constant(n), line)
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+pub enum ConstKey {
+    Nil,
+    Bool(bool),
+    Sym(String),
+    Str(String),
+    Int(IntType),
+}
+
+impl ConstKey {
+    pub fn from_val(val: &Value) -> Option<Self> {
+        match val {
+            Value::Nil => Some(Self::Nil),
+            Value::Bool(b) => Some(Self::Bool(*b)),
+            Value::Symbol(ref s) => Some(Self::Str(s.to_string())),
+            Value::String(ref s) => Some(Self::Sym(s.to_string())),
+            Value::Int(n) => Some(Self::Int(*n)),
+            _ => None,
+        }
     }
 }
