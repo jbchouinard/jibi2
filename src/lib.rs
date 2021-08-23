@@ -7,4 +7,5 @@ pub mod instruction;
 pub mod object;
 pub mod ops;
 pub mod reader;
+pub mod stack;
 pub mod vm;

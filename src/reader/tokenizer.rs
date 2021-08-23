@@ -62,7 +62,7 @@ lazy_static! {
     static ref RE_KEYWORD: Regex = Regex::new(
         r"(?x)
             ^(
-            def|set!|begin|let|if|cond|equal\?
+            def|fn|set!|begin|let|if|cond|equal\?
             |nil|true|false
             |\+|-|/|\*|=|!=|>|>=|<|<=
             )

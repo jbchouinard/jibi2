@@ -425,10 +425,11 @@ impl<'a> Parser<'a> {
             _ => panic!("expected keyword"),
         };
         match &keyword[..] {
-            "def" => return Err(self.error("definition after expression".to_string())),
-            "begin" => self.sform_begin()?,
+            "def" => return Err(self.error("def not at top level or top of scope".to_string())),
             "set!" => self.sform_set()?,
+            "fn" => self.sform_fn()?,
             "let" => self.sform_let()?,
+            "begin" => self.sform_begin()?,
             "if" => self.sform_if()?,
             "cond" => self.sform_cond()?,
             "equal?" => self.sform_equal()?,
@@ -460,11 +461,8 @@ impl<'a> Parser<'a> {
         self.compiler.emit_constant(Object::Nil);
         Ok(())
     }
-    fn sform_equal(&mut self) -> Result<()> {
-        self.expression()?;
-        self.expression()?;
-        self.compiler.emit_instruction(instruction_equal());
-        Ok(())
+    fn sform_fn(&mut self) -> Result<()> {
+        todo!()
     }
     fn sform_let(&mut self) -> Result<()> {
         self.compiler.begin_scope();
@@ -572,6 +570,12 @@ impl<'a> Parser<'a> {
         for jmp in to_end {
             self.compiler.patch_jump(jmp);
         }
+        Ok(())
+    }
+    fn sform_equal(&mut self) -> Result<()> {
+        self.expression()?;
+        self.expression()?;
+        self.compiler.emit_instruction(instruction_equal());
         Ok(())
     }
     fn sform_arith(&mut self, op: String) -> Result<()> {

@@ -50,7 +50,7 @@ impl<const N: usize> fmt::Display for Instruction<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}  ", self.op)?;
         for n in 0..N {
-            write!(f, "{:02x}  ", self.operands[n])?;
+            write!(f, "0x{:02x}  ", self.operands[n])?;
         }
         Ok(())
     }
@@ -68,7 +68,7 @@ impl fmt::Display for AnyInstruction {
 
 impl Chunk {
     pub fn disassemble_instruction(&self, prev_pos: usize, pos: usize) -> usize {
-        print!("{:04x}  ", pos);
+        print!("0x{:04x}  ", pos);
         let (ins, newpos) = AnyInstruction::read(&self.code, pos);
 
         let prev_line = self.get_line(prev_pos);

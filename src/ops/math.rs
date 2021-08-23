@@ -1,7 +1,6 @@
 #![allow(dead_code)]
-use std::str::FromStr;
 
-use crate::error::{Result, RuntimeError};
+use crate::error::{ArgumentError, Result};
 use crate::object::{FloatType, IntType, Object, TypeError};
 use crate::{binary_op, vararg_op};
 
@@ -16,7 +15,7 @@ vararg_op!(op_add, args, {
 vararg_op!(op_sub, args, {
     let mut acc = match args.pop() {
         Some(n) => n.to_number()?,
-        None => return Err(RuntimeError::new("need at least 1 arg".to_string()).into()),
+        None => return Err(ArgumentError::new("need at least 1 arg".to_string()).into()),
     };
     for n in args {
         acc = acc.sub(&n.to_number()?)?;
@@ -35,7 +34,7 @@ vararg_op!(op_mul, args, {
 vararg_op!(op_div, args, {
     let mut acc = match args.pop() {
         Some(n) => n.to_number()?,
-        None => return Err(RuntimeError::new("need at least 1 arg".to_string()).into()),
+        None => return Err(ArgumentError::new("need at least 1 arg".to_string()).into()),
     };
     for n in args {
         acc = acc.div(&n.to_number()?)?;
@@ -92,9 +91,7 @@ impl Number {
             Self::Int(n) => {
                 let x = *n as FloatType;
                 if x as IntType != *n {
-                    return Err(
-                        RuntimeError::new(format!("cannot convert int {} to float", n)).into(),
-                    );
+                    return Err(TypeError::new(format!("cannot convert int {} to float", n)).into());
                 }
                 Ok(x)
             }
@@ -111,7 +108,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_add(*m)
-                .ok_or_else(|| RuntimeError::from_str("int overflow").unwrap())?;
+                .ok_or_else(|| TypeError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? + other.as_float()?))
@@ -122,7 +119,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_sub(*m)
-                .ok_or_else(|| RuntimeError::from_str("int overflow").unwrap())?;
+                .ok_or_else(|| ArgumentError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? - other.as_float()?))
@@ -133,7 +130,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_mul(*m)
-                .ok_or_else(|| RuntimeError::from_str("int overflow").unwrap())?;
+                .ok_or_else(|| ArgumentError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? * other.as_float()?))
@@ -144,7 +141,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_div(*m)
-                .ok_or_else(|| RuntimeError::from_str("int overflow").unwrap())?;
+                .ok_or_else(|| ArgumentError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? / other.as_float()?))

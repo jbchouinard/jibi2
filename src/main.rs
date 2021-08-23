@@ -41,6 +41,7 @@ fn main() {
     #[cfg(debug_trace_compile)]
     {
         use jibi2::object::{FloatType, Function, IntType, Object};
+        use jibi2::vm::{CallFrame, CallStack, Stack};
         use std::rc::Rc;
         printsize::<bool>("Bool");
         printsize::<IntType>("Int");
@@ -50,6 +51,9 @@ fn main() {
         printsize::<Function>("Function");
         printsize::<Box<Function>>("FunctionRef");
         printsize::<Object>("Value");
+        printsize::<Stack>("Stack");
+        printsize::<CallFrame>("CallFrame");
+        printsize::<CallStack>("CallStack");
     }
     let Opt { files, interactive } = Opt::from_args();
 
@@ -57,10 +61,17 @@ fn main() {
 
     for file in &files {
         let source = std::fs::read_to_string(file).unwrap();
-        match vm.interpret_source(&file.to_string_lossy().to_string(), &source) {
+        match vm.load_source(&file.to_string_lossy().to_string(), &source) {
             Ok(()) => (),
             Err(e) => {
-                eprintln!("{}", e);
+                eprintln!("Compilation error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        match vm.run() {
+            Ok(()) => (),
+            Err(e) => {
+                eprintln!("Runtime error: {}", e);
                 std::process::exit(1);
             }
         }
@@ -78,10 +89,23 @@ fn repl(vm: &mut VM) {
 
     loop {
         match get_tokens(&mut rl) {
-            Ok(tokens) => match vm.interpret_tokens(Box::new(tokens.into_iter())) {
-                Ok(()) => println!("{}", vm.register0.take().unwrap()),
-                Err(e) => eprintln!("{}", e),
-            },
+            Ok(tokens) => {
+                match vm.load_tokens(Box::new(tokens.into_iter())) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        vm.reset();
+                        eprintln!("{}", e);
+                        continue;
+                    }
+                }
+                match vm.run() {
+                    Ok(()) => println!("{}", vm.register0.take().unwrap()),
+                    Err(e) => {
+                        vm.reset();
+                        eprintln!("{}", e);
+                    }
+                }
+            }
             Err(e) => eprintln!("{}", e),
         }
     }

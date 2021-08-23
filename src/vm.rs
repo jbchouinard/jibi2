@@ -1,79 +1,86 @@
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::fmt;
 use std::rc::Rc;
-use std::str::FromStr;
 
 use crate::compiler::{compile_source, compile_tokens, FunctionType};
-use crate::error::Result;
+use crate::error::{ArgumentError, Error, Result};
 use crate::instruction::{AnyInstruction, Op};
 use crate::object::{FunctionRef, Object};
 use crate::ops::*;
 use crate::reader::TokenProducer;
+use crate::stack::ArrayStack;
 
-// TODO: use fixed sized arrays to avoid heap allocations
-pub type Stack = Vec<Object>;
-pub type CallStack = Vec<CallFrame>;
-
-const INI_STACK_SIZE: usize = 32;
-const MAX_STACK_SIZE: usize = 16 * 1024;
+// 256KiB / 16 bytes per Object
+pub type Stack = ArrayStack<Object, { 256 * 1024 / 16 }>;
+pub type CallStack = ArrayStack<CallFrame, 1024>;
 
 pub struct VM {
-    pub register0: Option<Object>,
     pub stack: Stack,
     pub frames: CallStack,
+    pub register0: Option<Object>,
     pub globals: HashMap<String, Object>,
 }
 
 impl VM {
     pub fn new() -> Self {
         Self {
-            stack: Vec::with_capacity(INI_STACK_SIZE),
+            stack: Stack::new(),
             register0: None,
             globals: HashMap::new(),
-            frames: vec![],
+            frames: CallStack::new(),
         }
     }
-    pub fn interpret(&mut self, function: FunctionRef) -> Result<()> {
+    pub fn load(&mut self, function: FunctionRef) -> Result<()> {
         self.stack.push(Object::Function(Rc::clone(&function)));
         self.frames.push(CallFrame::new(Rc::clone(&function), 0, 0));
-        let res = self.run();
-        if res.is_err() {
-            self.clear_stack();
-        }
-        res
+        Ok(())
     }
-    pub fn interpret_source(&mut self, filename: &str, source: &str) -> Result<()> {
+    pub fn load_source(&mut self, filename: &str, source: &str) -> Result<()> {
         let function = compile_source(filename, source, FunctionType::Script)?;
-        self.interpret(function)
+        self.load(function)
     }
-    pub fn interpret_tokens(&mut self, producer: Box<dyn TokenProducer>) -> Result<()> {
+    pub fn load_tokens(&mut self, producer: Box<dyn TokenProducer>) -> Result<()> {
         let function = compile_tokens(producer, FunctionType::Script)?;
-        self.interpret(function)
+        self.load(function)
     }
     fn peek(&self, n: usize) -> &Object {
-        &self.stack[self.stack.len() - 1 - n]
+        self.stack.peek_ref(n)
     }
-    fn clear_stack(&mut self) {
-        self.stack = Vec::with_capacity(INI_STACK_SIZE);
+    pub fn reset(&mut self) {
+        self.register0 = None;
+        self.stack = Stack::new();
+        self.frames = CallStack::new();
     }
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> RunResult<()> {
+        match self._run() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let offset = self.frames.peek_ref(0).ip;
+                let function = self.frames.peek_ref(0).function.borrow();
+                let err = VMError {
+                    err: e,
+                    offset,
+                    function: function.name.to_string(),
+                    lineno: function.code.get_line(offset),
+                };
+                Err(err)
+            }
+        }
+    }
+
+    fn _run(&mut self) -> Result<()> {
         macro_rules! frame {
             () => {
-                self.frames.last().unwrap()
+                self.frames.peek_ref(0)
             };
         }
         macro_rules! mutframe {
             () => {
-                self.frames.last_mut().unwrap()
+                self.frames.peek_mut(0)
             };
         }
 
         loop {
-            if self.stack.len() > MAX_STACK_SIZE {
-                panic!("stack too large");
-            }
-
             #[cfg(debug_trace_execution)]
             self.trace_execution(chunk);
 
@@ -106,49 +113,49 @@ impl VM {
                 Op::NumGte => op_num_gte(&mut self.stack)?,
                 Op::Equal => op_equal(&mut self.stack)?,
                 Op::PopR0 => {
-                    self.register0 = Some(self.stack.pop().unwrap());
+                    self.register0 = Some(self.stack.pop());
                 }
                 Op::PushR0 => self.stack.push(self.register0.take().unwrap()),
                 Op::Pop => {
-                    self.stack.pop().unwrap();
+                    self.stack.pop();
                 }
                 Op::PopN => {
                     for _ in 0..ins.get_operand(0) {
-                        self.stack.pop().unwrap();
+                        self.stack.pop();
                     }
                 }
                 Op::DefGlobal => {
-                    let sym = self.stack.pop().unwrap().as_symbol()?.to_string();
-                    let val = self.stack.pop().unwrap();
+                    let sym = self.stack.pop().as_symbol()?.to_string();
+                    let val = self.stack.pop();
                     self.globals.insert(sym, val);
                 }
                 Op::GetGlobal => {
-                    let sym = self.stack.pop().unwrap().as_symbol()?.to_string();
+                    let sym = self.stack.pop().as_symbol()?.to_string();
                     match self.globals.get(&sym) {
                         Some(val) => self.stack.push(val.clone()),
                         None => {
-                            return Err(RuntimeError::new(format!("Undefined name {}", sym)).into())
+                            return Err(ArgumentError::new(format!("Undefined name {}", sym)).into())
                         }
                     }
                 }
                 Op::SetGlobal => {
-                    let sym = self.stack.pop().unwrap().as_symbol()?.to_string();
-                    let val = self.stack.pop().unwrap();
+                    let sym = self.stack.pop().as_symbol()?.to_string();
+                    let val = self.stack.pop();
                     match self.globals.get(&sym) {
                         Some(_) => {
                             self.globals.insert(sym, val);
                         }
                         None => {
-                            return Err(RuntimeError::new(format!("Undefined name {}", sym)).into())
+                            return Err(ArgumentError::new(format!("Undefined name {}", sym)).into())
                         }
                     }
                 }
                 Op::GetLocal | Op::GetLocalLong => self
                     .stack
-                    .push(self.stack[frame!().fp + ins.get_usize()].clone()),
+                    .push(self.stack.get_ref(frame!().fp + ins.get_usize()).clone()),
                 Op::SetLocal | Op::SetLocalLong => {
-                    let val = self.stack.pop().unwrap();
-                    self.stack[frame!().fp + ins.get_usize()] = val;
+                    let val = self.stack.pop();
+                    *self.stack.get_mut(frame!().fp + ins.get_usize()) = val;
                     self.stack.push(Object::Nil)
                 }
                 Op::Constant | Op::ConstantLong => self
@@ -160,9 +167,6 @@ impl VM {
             }
             mutframe!().ip = newpos;
         }
-    }
-    pub fn reset_stack(&mut self) {
-        self.stack = Vec::with_capacity(INI_STACK_SIZE);
     }
     #[cfg(debug_trace_execution)]
     fn trace_execution(&self, frame: &CallFrame) {
@@ -194,26 +198,22 @@ impl CallFrame {
     }
 }
 
+type RunResult<T> = std::result::Result<T, VMError>;
+
 #[derive(Debug)]
-pub struct RuntimeError {
-    reason: String,
+pub struct VMError {
+    err: Error,
+    offset: usize,
+    lineno: usize,
+    function: String,
 }
 
-impl RuntimeError {
-    pub fn new(reason: String) -> Self {
-        Self { reason }
-    }
-}
-
-impl FromStr for RuntimeError {
-    type Err = Infallible;
-    fn from_str(reason: &str) -> std::result::Result<Self, Infallible> {
-        Ok(Self::new(reason.to_string()))
-    }
-}
-
-impl fmt::Display for RuntimeError {
+impl fmt::Display for VMError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "RuntimeError: {}", self.reason)
+        write!(
+            f,
+            "{} (in {} at line {}, offset 0x{:04x})",
+            self.err, self.function, self.lineno, self.offset
+        )
     }
 }

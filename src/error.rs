@@ -3,14 +3,13 @@ use std::fmt;
 pub use crate::compiler::SyntaxError;
 pub use crate::object::TypeError;
 pub use crate::reader::tokenizer::LexError;
-pub use crate::vm::RuntimeError;
 
 #[derive(Debug)]
 pub enum Error {
     Lex(LexError),
     Syntax(SyntaxError),
-    Runtime(RuntimeError),
     Type(TypeError),
+    Argument(ArgumentError),
 }
 
 impl fmt::Display for Error {
@@ -18,8 +17,8 @@ impl fmt::Display for Error {
         match self {
             Self::Syntax(e) => write!(f, "{}", e),
             Self::Lex(e) => write!(f, "{}", e),
-            Self::Runtime(e) => write!(f, "{}", e),
             Self::Type(e) => write!(f, "{}", e),
+            Self::Argument(e) => write!(f, "{}", e),
         }
     }
 }
@@ -36,16 +35,33 @@ impl From<SyntaxError> for Error {
     }
 }
 
-impl From<RuntimeError> for Error {
-    fn from(re: RuntimeError) -> Self {
-        Self::Runtime(re)
-    }
-}
-
 impl From<TypeError> for Error {
     fn from(te: TypeError) -> Self {
         Self::Type(te)
     }
 }
 
+impl From<ArgumentError> for Error {
+    fn from(e: ArgumentError) -> Self {
+        Self::Argument(e)
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub struct ArgumentError {
+    reason: String,
+}
+
+impl ArgumentError {
+    pub fn new(reason: String) -> Self {
+        Self { reason }
+    }
+}
+
+impl fmt::Display for ArgumentError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ArgumentError: {}", self.reason)
+    }
+}
