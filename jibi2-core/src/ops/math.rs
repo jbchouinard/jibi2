@@ -4,42 +4,44 @@ use crate::error::{ArgumentError, Result};
 use crate::object::{FloatType, IntType, Object, TypeError};
 use crate::{binary_op, vararg_op};
 
-vararg_op!(op_add, args, {
+vararg_op!(op_add, nargs, stack {
     let mut acc = Number::Int(0);
-    for n in args {
-        acc = acc.add(&n.to_number()?)?;
+    for _ in 0..nargs {
+        acc = acc.add(&stack.pop().to_number()?)?;
     }
-    acc.to_val()
+    stack.push(acc.to_val());
 });
 
-vararg_op!(op_sub, args, {
-    let mut acc = match args.pop() {
-        Some(n) => n.to_number()?,
-        None => return Err(ArgumentError::new("need at least 1 arg".to_string()).into()),
-    };
-    for n in args {
-        acc = acc.sub(&n.to_number()?)?;
+vararg_op!(op_sub, nargs, stack {
+    if nargs < 1 {
+        return Err(ArgumentError::new("need at least 1 arg".to_string()).into());
     }
-    acc.to_val()
+    let mut acc = Number::Int(0);
+    for _ in 0..nargs-1 {
+        acc = acc.sub(&stack.pop().to_number()?)?;
+    }
+    acc = acc.add(&stack.pop().to_number()?)?;
+    stack.push(acc.to_val());
 });
 
-vararg_op!(op_mul, args, {
+vararg_op!(op_mul, nargs, stack {
     let mut acc = Number::Int(1);
-    for n in args {
-        acc = acc.mul(&n.to_number()?)?;
+    for _ in 0..nargs {
+        acc = acc.mul(&stack.pop().to_number()?)?;
     }
-    acc.to_val()
+    stack.push(acc.to_val());
 });
 
-vararg_op!(op_div, args, {
-    let mut acc = match args.pop() {
-        Some(n) => n.to_number()?,
-        None => return Err(ArgumentError::new("need at least 1 arg".to_string()).into()),
-    };
-    for n in args {
-        acc = acc.div(&n.to_number()?)?;
+vararg_op!(op_div, nargs, stack {
+    if nargs < 1 {
+        return Err(ArgumentError::new("need at least 1 arg".to_string()).into());
     }
-    acc.to_val()
+    let mut acc = Number::Int(1);
+    for _ in 0..nargs-1 {
+        acc = acc.div(&stack.pop().to_number()?)?;
+    }
+    acc = acc.mul(&stack.pop().to_number()?)?;
+    stack.push(acc.to_val());
 });
 
 binary_op!(op_num_eq, x, y, {

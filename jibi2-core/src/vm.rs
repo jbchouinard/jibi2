@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use crate::compiler::{compile_source, compile_tokens, FunctionType};
+use crate::compiler::{compile_source, compile_tokens};
 use crate::error::{ArgumentError, Error, Result};
 use crate::instruction::{AnyInstruction, Op};
-use crate::object::{FunctionRef, Object};
+use crate::native::add_native_functions;
+use crate::object::{FunctionRef, NativeFn, NativeFunction, Object, TypeError};
 use crate::ops::*;
 use crate::reader::TokenProducer;
 use crate::stack::ArrayStack;
@@ -21,6 +22,14 @@ pub struct VM {
     pub globals: HashMap<String, Object>,
 }
 
+impl Default for VM {
+    fn default() -> Self {
+        let mut vm = VM::new();
+        add_native_functions(&mut vm);
+        vm
+    }
+}
+
 impl VM {
     pub fn new() -> Self {
         Self {
@@ -31,17 +40,22 @@ impl VM {
         }
     }
     pub fn load(&mut self, function: FunctionRef) -> Result<()> {
-        self.stack.push(Object::Function(Rc::clone(&function)));
         self.frames.push(CallFrame::new(Rc::clone(&function), 0, 0));
+        self.stack.push(Object::Function(Rc::clone(&function)));
         Ok(())
     }
     pub fn load_source(&mut self, filename: &str, source: &str) -> Result<()> {
-        let function = compile_source(filename, source, FunctionType::Script)?;
+        let function = compile_source(filename, source)?;
         self.load(function)
     }
-    pub fn load_tokens(&mut self, producer: Box<dyn TokenProducer>) -> Result<()> {
-        let function = compile_tokens(producer, FunctionType::Script)?;
+    pub fn load_tokens(&mut self, name: &str, producer: Box<dyn TokenProducer>) -> Result<()> {
+        let function = compile_tokens(name, producer)?;
         self.load(function)
+    }
+    pub fn define_native(&mut self, name: &str, f: NativeFn) {
+        let nf = NativeFunction::new(name.to_string(), f);
+        let obj = Object::NativeFunction(Rc::new(nf));
+        self.globals.insert(name.to_string(), obj);
     }
     fn peek(&self, n: usize) -> &Object {
         self.stack.peek_ref(n)
@@ -55,6 +69,7 @@ impl VM {
         match self._run() {
             Ok(()) => Ok(()),
             Err(e) => {
+                let trace = self.stacktrace();
                 let offset = self.frames.peek_ref(0).ip;
                 let function = self.frames.peek_ref(0).function.borrow();
                 let err = VMError {
@@ -62,12 +77,26 @@ impl VM {
                     offset,
                     function: function.name.to_string(),
                     lineno: function.code.get_line(offset),
+                    trace,
                 };
                 Err(err)
             }
         }
     }
-
+    fn stacktrace(&mut self) -> Vec<String> {
+        let mut trace = vec![];
+        for i in 0..self.frames.size {
+            let frame = self.frames.get_ref(i);
+            let offset = frame.ip - 1;
+            let function = frame.function.borrow();
+            trace.push(format!(
+                "Line {}, in {}",
+                function.code.get_line(offset),
+                &function.name
+            ));
+        }
+        trace
+    }
     fn _run(&mut self) -> Result<()> {
         macro_rules! frame {
             () => {
@@ -82,7 +111,7 @@ impl VM {
 
         loop {
             #[cfg(debug_trace_execution)]
-            self.trace_execution(chunk);
+            self.trace_execution(frame!());
 
             let (ins, mut newpos) =
                 AnyInstruction::read(&frame!().function.borrow().code.code, frame!().ip);
@@ -100,6 +129,19 @@ impl VM {
                     if !self.peek(0).as_bool()? {
                         newpos += ins.get_usize();
                     }
+                }
+                Op::Repr => {
+                    let val = self.stack.pop();
+                    self.stack.push(Object::String(Rc::new(val.to_string())));
+                }
+                Op::Print => {
+                    let val = self.stack.pop();
+                    let s = match val {
+                        Object::String(s) => s.to_string(),
+                        _ => val.to_string(),
+                    };
+                    println!("{}", s);
+                    self.stack.push(Object::Nil);
                 }
                 Op::Add | Op::AddLong => op_add(&mut self.stack, ins.get_usize())?,
                 Op::Sub | Op::SubLong => op_sub(&mut self.stack, ins.get_usize())?,
@@ -162,7 +204,48 @@ impl VM {
                     .stack
                     .push(frame!().function.borrow().code.constants[ins.get_usize()].clone()),
                 Op::Return => {
-                    return Ok(());
+                    let returning = self.frames.pop();
+                    let result = self.stack.pop();
+                    // Pop off arguments and function
+                    for _ in 0..returning.function.borrow().arity + 1 {
+                        self.stack.pop();
+                    }
+                    // Stash last return value in R0, finish
+                    if self.frames.size == 0 {
+                        self.register0 = Some(result);
+                        return Ok(());
+                    } else {
+                        self.stack.push(result);
+                    }
+                    continue;
+                }
+                Op::Apply => {
+                    mutframe!().ip = newpos;
+                    let nargs = ins.get_usize();
+                    let function = self.stack.peek_ref(nargs).clone();
+                    match function {
+                        Object::Function(function) => {
+                            let arity = function.borrow().arity;
+                            if arity != nargs {
+                                return Err(ArgumentError::new(format!(
+                                    "expected {} arguments, got {}",
+                                    arity, nargs
+                                ))
+                                .into());
+                            }
+                            let fp = self.stack.size - arity - 1;
+                            self.frames.push(CallFrame::new(function, 0, fp));
+                        }
+                        Object::NativeFunction(function) => {
+                            function.call(nargs, &mut self.stack)?;
+                            let result = self.stack.pop();
+                            // Pop off function value
+                            self.stack.pop();
+                            self.stack.push(result);
+                        }
+                        _ => return Err(TypeError::new("expected callable".to_string()).into()),
+                    }
+                    continue;
                 }
             }
             mutframe!().ip = newpos;
@@ -171,18 +254,25 @@ impl VM {
     #[cfg(debug_trace_execution)]
     fn trace_execution(&self, frame: &CallFrame) {
         println!("------------------------------------------------");
-        println!("IP: {}", frame.ip);
-        println!("GLOBALS: {:?}", self.globals);
-        print!("REGISTER0: {:?}", self.register0);
+        frame
+            .function
+            .borrow()
+            .code
+            .disassemble_instruction(frame.ip, frame.ip);
+        print!("GLOBALS: ");
+        for (k, v) in self.globals.iter() {
+            print!("{}: {}, ", k, v)
+        }
+        println!();
         println!(
-            "\nSTACK: {}",
-            self.stack
-                .iter()
-                .map(|v| v.to_string())
-                .collect::<Vec<String>>()
-                .join(" ")
+            "REGISTER0: {}",
+            self.register0.as_ref().unwrap_or(&Object::Nil)
         );
-        chunk.disassemble_instruction(self.ip, self.ip);
+        print!("STACK:");
+        for i in 0..self.stack.size {
+            print!("  {}", self.stack.get_ref(i));
+        }
+        println!();
     }
 }
 
@@ -206,6 +296,16 @@ pub struct VMError {
     offset: usize,
     lineno: usize,
     function: String,
+    trace: Vec<String>,
+}
+
+impl VMError {
+    pub fn print_trace(&self) {
+        println!("Traceback:");
+        for line in &self.trace {
+            println!("  {}", line);
+        }
+    }
 }
 
 impl fmt::Display for VMError {

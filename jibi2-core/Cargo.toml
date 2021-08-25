@@ -1,0 +1,16 @@
+[package]
+name = "jibi2-core"
+description = "Core library for the jibi2 interpreter."
+version = "0.1.0"
+authors = ["Jérome Boisvert-Chouinard"]
+repository = "https://github.com/jbchouinard/jibi2"
+license = "MIT"
+readme = "../README.md"
+edition = "2018"
+
+[lib]
+name = "jibi2"
+
+[dependencies]
+lazy_static = "1.4.0"
+regex = "1.5.4"

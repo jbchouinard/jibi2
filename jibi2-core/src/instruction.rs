@@ -34,6 +34,9 @@ pub enum Op {
     Jump,
     JumpTrue,
     JumpFalse,
+    Apply,
+    Repr,
+    Print,
 }
 
 impl Op {
@@ -74,6 +77,9 @@ impl Op {
             n if n == Op::Jump as u8 => Op::Jump,
             n if n == Op::JumpTrue as u8 => Op::JumpTrue,
             n if n == Op::JumpFalse as u8 => Op::JumpFalse,
+            n if n == Op::Apply as u8 => Op::Apply,
+            n if n == Op::Repr as u8 => Op::Repr,
+            n if n == Op::Print as u8 => Op::Print,
             _ => panic!("invalid opcode {}", n),
         }
     }
@@ -185,6 +191,9 @@ instruction_simple!(instruction_equal, Op::Equal);
 instruction_long!(instruction_jump, Op::Jump);
 instruction_long!(instruction_jump_if_true, Op::JumpTrue);
 instruction_long!(instruction_jump_if_false, Op::JumpFalse);
+instruction_short!(instruction_apply, Op::Apply);
+instruction_simple!(instruction_repr, Op::Repr);
+instruction_simple!(instruction_print, Op::Print);
 
 macro_rules! op0 {
     ($f:ident, $c:expr, $p:expr) => {
@@ -261,8 +270,6 @@ impl AnyInstruction {
                 | Op::NumLte
                 | Op::NumGt
                 | Op::NumGte
-                // TODO: Check that jump is within bounds of expression, otherwise
-                // not static
                 | Op::Jump
                 | Op::JumpTrue
                 | Op::JumpFalse
@@ -305,6 +312,9 @@ impl AnyInstruction {
             Op::Jump => op2!(instruction_jump, code, pos),
             Op::JumpTrue => op2!(instruction_jump_if_true, code, pos),
             Op::JumpFalse => op2!(instruction_jump_if_false, code, pos),
+            Op::Apply => op1!(instruction_apply, code, pos),
+            Op::Repr => op0!(instruction_repr, code, pos),
+            Op::Print => op0!(instruction_print, code, pos),
         }
     }
 }

@@ -6,6 +6,8 @@ use regex::Regex;
 use crate::object::{FloatType, IntType};
 use crate::reader::PositionTag;
 
+pub type Result<T> = std::result::Result<T, LexError>;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenValue {
     None,
@@ -63,6 +65,7 @@ lazy_static! {
         r"(?x)
             ^(
             def|fn|set!|begin|let|if|cond|equal\?
+            |repr|print
             |nil|true|false
             |\+|-|/|\*|=|!=|>|>=|<|<=
             )
@@ -175,7 +178,7 @@ impl Tokenizer {
         }
     }
 
-    fn try_token<T>(&mut self, re: &Regex, cons: T) -> Result<Option<Token>, LexError>
+    fn try_token<T>(&mut self, re: &Regex, cons: T) -> Result<Option<Token>>
     where
         T: Fn(&str) -> TResult,
     {
@@ -194,7 +197,7 @@ impl Tokenizer {
 }
 
 pub trait TokenProducer {
-    fn next_token(&mut self) -> Result<Token, LexError>;
+    fn next_token(&mut self) -> Result<Token>;
 }
 
 pub struct TokenIterator<'a, T: TokenProducer + ?Sized> {
@@ -202,8 +205,8 @@ pub struct TokenIterator<'a, T: TokenProducer + ?Sized> {
 }
 
 impl<'a, 'b, T: TokenProducer> Iterator for TokenIterator<'a, T> {
-    type Item = Result<Token, LexError>;
-    fn next(self: &mut TokenIterator<'a, T>) -> Option<Result<Token, LexError>> {
+    type Item = Result<Token>;
+    fn next(self: &mut TokenIterator<'a, T>) -> Option<Result<Token>> {
         match self.tokeniter.next_token() {
             Ok(tok) => match tok.value {
                 TokenValue::Eof => None,
@@ -227,7 +230,7 @@ impl<T: TokenProducer> TokenToIter for T {
 }
 
 impl TokenProducer for Tokenizer {
-    fn next_token(&mut self) -> Result<Token, LexError> {
+    fn next_token(&mut self) -> Result<Token> {
         while self.eat_whitespace() || self.eat_comment() {}
 
         if self.pos >= self.input.len() {
@@ -262,7 +265,7 @@ impl TokenProducer for Tokenizer {
 }
 
 impl TokenProducer for std::vec::IntoIter<Token> {
-    fn next_token(&mut self) -> Result<Token, LexError> {
+    fn next_token(&mut self) -> Result<Token> {
         match self.next() {
             Some(tok) => Ok(tok),
             None => Ok(Token::new(TokenValue::Eof, PositionTag::new("", 0, 0))),
@@ -289,12 +292,10 @@ impl TokenValidator {
     }
     /// Returns None when more input is expected based on counting parens.
     /// Returns tokens when it looks like it may form a complete expression.
-    pub fn input(&mut self, s: String) -> Result<Option<Vec<Token>>, LexError> {
+    pub fn input(&mut self, s: String) -> Result<Option<Vec<Token>>> {
         self.lineno += 1;
         let mut tokenizer = Tokenizer::with_lineno(self.filename.clone(), s, self.lineno);
-        let new_toks: Vec<Token> = tokenizer
-            .to_iter()
-            .collect::<Result<Vec<Token>, LexError>>()?;
+        let new_toks: Vec<Token> = tokenizer.to_iter().collect::<Result<Vec<Token>>>()?;
         for tok in new_toks {
             match tok.value {
                 TokenValue::Char('(') => self.balance.push(TokenValue::Char('(')),
@@ -330,7 +331,7 @@ pub struct LexError {
 }
 
 impl fmt::Display for LexError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LexError: {} at character {}", self.reason, self.pos,)
     }
 }
@@ -347,10 +348,7 @@ mod tests {
 
     fn test_tokenizer(input: &str, expected: Vec<TokenValue>) {
         let mut tokenizer = Tokenizer::new("test".to_string(), input.to_string());
-        let tokens = tokenizer
-            .to_iter()
-            .collect::<Result<Vec<Token>, LexError>>()
-            .unwrap();
+        let tokens = tokenizer.to_iter().collect::<Result<Vec<Token>>>().unwrap();
         let tokvalues: Vec<TokenValue> = tokens.into_iter().map(|t| t.value).collect();
         assert_eq!(expected, tokvalues);
     }

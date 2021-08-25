@@ -8,24 +8,20 @@ use crate::object::{Function, FunctionRef, Object};
 use crate::reader::{PositionTag, Token, TokenProducer, TokenValue, Tokenizer};
 use crate::vm::{CallFrame, VM};
 
-pub fn compile_tokens(
-    producer: Box<dyn TokenProducer>,
-    function_type: FunctionType,
-) -> Result<FunctionRef> {
-    let mut compiler = Compiler::new(function_type);
-    let mut parser = Parser::new(&mut compiler, producer);
+const TOK_LPAR: TokenValue = TokenValue::Char('(');
+const TOK_RPAR: TokenValue = TokenValue::Char(')');
+
+pub fn compile_tokens(name: &str, producer: Box<dyn TokenProducer>) -> Result<FunctionRef> {
+    let compiler = Compiler::new(Rc::new(name.to_string()));
+    let mut parser = Parser::new(compiler, producer);
     parser.advance()?;
     parser.parse()?;
-    Ok(compiler.end())
+    Ok(parser.end())
 }
 
-pub fn compile_source(
-    filename: &str,
-    source: &str,
-    function_type: FunctionType,
-) -> Result<FunctionRef> {
+pub fn compile_source(filename: &str, source: &str) -> Result<FunctionRef> {
     let tokens = Tokenizer::new(filename.to_string(), source.to_string());
-    compile_tokens(Box::new(tokens), function_type)
+    compile_tokens(&format!("<script \"{}\">", filename), Box::new(tokens))
 }
 
 #[derive(Debug)]
@@ -45,14 +41,8 @@ pub enum Variable {
     Local(usize),
 }
 
-pub enum FunctionType {
-    Function,
-    Script,
-}
-
 pub struct Compiler {
     function: FunctionRef,
-    function_type: FunctionType,
     scope_depth: i32,
     locals: Vec<Local>,
     lists: Vec<usize>,
@@ -61,14 +51,10 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    pub fn new(function_type: FunctionType) -> Self {
-        let mut function = Function::new();
-        if let FunctionType::Script = function_type {
-            function.name = Rc::new("<script>".to_string());
-        }
+    pub fn new(name: Rc<String>) -> Self {
+        let function = Function::new(name);
         Self {
             function: function.to_ref(),
-            function_type,
             scope_depth: 0,
             locals: vec![Local::new("".to_string(), 0)],
             lists: vec![],
@@ -247,7 +233,6 @@ impl Compiler {
         self.discard = false;
     }
     fn pre_evaluate(&mut self, start: usize) -> Object {
-        self.emit_instruction(instruction_pop_r0());
         self.emit_instruction(instruction_return());
 
         #[cfg(debug_trace_compile)]
@@ -255,6 +240,9 @@ impl Compiler {
             .borrow()
             .code
             .disassemble("static expression", start);
+
+        // Temporarily change arity to prevent popping on return
+        let real_arity = std::mem::replace(&mut self.function.borrow_mut().arity, 0);
 
         let mut vm = VM::new();
         vm.stack.push(Object::Function(Rc::clone(&self.function)));
@@ -264,6 +252,7 @@ impl Compiler {
         let res = vm.register0.take().unwrap();
 
         self.function.borrow_mut().code.erase(start);
+        self.function.borrow_mut().arity = real_arity;
 
         #[cfg(debug_trace_compile)]
         println!("evaluated to: {}", res);
@@ -290,25 +279,34 @@ impl Compiler {
         self.function
             .borrow()
             .code
-            .disassemble(&self.function.borrow().name, 0);
-        std::mem::replace(&mut self.function, Function::new().to_ref())
+            .disassemble(&format!("{}", self.function.borrow()), 0);
+        std::mem::replace(
+            &mut self.function,
+            Function::new(Rc::new("".to_string())).to_ref(),
+        )
     }
 }
 
-pub struct Parser<'a> {
+pub struct Parser {
     producer: Box<dyn TokenProducer>,
     peek: Token,
     stashed_next: Option<Token>,
-    compiler: &'a mut Compiler,
+    compilers: Vec<Compiler>,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(compiler: &'a mut Compiler, producer: Box<dyn TokenProducer>) -> Self {
+macro_rules! compiler {
+    ($self:ident) => {
+        $self.compilers.last_mut().unwrap()
+    };
+}
+
+impl Parser {
+    pub fn new(compiler: Compiler, producer: Box<dyn TokenProducer>) -> Self {
         Self {
             producer,
             peek: Token::new(TokenValue::None, PositionTag::new("", 1, 0)),
             stashed_next: None,
-            compiler,
+            compilers: vec![compiler],
         }
     }
     fn advance(&mut self) -> Result<Token> {
@@ -320,7 +318,7 @@ impl<'a> Parser<'a> {
         if next.value == TokenValue::Eof {
             return Err(self.error_at(&next, "reached EOF".to_string()));
         }
-        self.compiler.pos = self.peek.pos.clone();
+        compiler!(self).pos = self.peek.pos.clone();
         Ok(next)
     }
     fn rewind(&mut self, tok: Token) {
@@ -339,12 +337,14 @@ impl<'a> Parser<'a> {
     pub fn parse(&mut self) -> Result<()> {
         // Empty program, return nil
         if self.peek.value == TokenValue::Eof {
-            self.compiler.emit_constant(Object::Nil);
-            self.compiler.emit_instruction(instruction_pop_r0());
+            compiler!(self).emit_constant(Object::Nil);
+            return Ok(());
         }
         while self.peek.value != TokenValue::Eof {
             self.top_level_expression()?;
-            self.compiler.emit_instruction(instruction_pop_r0());
+            if self.peek.value != TokenValue::Eof {
+                compiler!(self).emit_instruction(instruction_pop());
+            }
         }
         Ok(())
     }
@@ -356,12 +356,10 @@ impl<'a> Parser<'a> {
     }
     pub fn definition(&mut self) -> Result<bool> {
         let next = self.advance()?;
-        if next.value == TokenValue::Char('(')
-            && self.peek.value == TokenValue::Keyword("def".to_string())
-        {
+        if next.value == TOK_LPAR && self.peek.value == TokenValue::Keyword("def".to_string()) {
             self.advance()?;
             self.sform_def()?;
-            self.expect(TokenValue::Char(')'))?;
+            self.expect(TOK_RPAR)?;
             return Ok(true);
         }
         self.rewind(next);
@@ -376,10 +374,10 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<()> {
         let current = self.advance()?;
         match current.value {
-            TokenValue::Int(n) => self.compiler.emit_constant(Object::Int(n)),
-            TokenValue::Float(x) => self.compiler.emit_constant(Object::Float(x)),
-            TokenValue::String(s) => self.compiler.emit_constant(Object::String(Rc::new(s))),
-            TokenValue::Ident(s) => self.compiler.get_variable(s)?,
+            TokenValue::Int(n) => compiler!(self).emit_constant(Object::Int(n)),
+            TokenValue::Float(x) => compiler!(self).emit_constant(Object::Float(x)),
+            TokenValue::String(s) => compiler!(self).emit_constant(Object::String(Rc::new(s))),
+            TokenValue::Ident(s) => compiler!(self).get_variable(s)?,
             TokenValue::Keyword(k) => self.atom_const(k)?,
             _ => return Err(self.error_at(&current, format!("unexpected {}", current.value))),
         };
@@ -387,23 +385,33 @@ impl<'a> Parser<'a> {
     }
     pub fn atom_const(&mut self, sym: String) -> Result<()> {
         match &sym[..] {
-            "nil" => self.compiler.emit_constant(Object::Nil),
-            "true" => self.compiler.emit_constant(Object::Bool(true)),
-            "false" => self.compiler.emit_constant(Object::Bool(false)),
+            "nil" => compiler!(self).emit_constant(Object::Nil),
+            "true" => compiler!(self).emit_constant(Object::Bool(true)),
+            "false" => compiler!(self).emit_constant(Object::Bool(false)),
             _ => return Err(self.error(format!("ill-formed special form {}", sym))),
         }
         Ok(())
     }
     fn list(&mut self) -> Result<()> {
-        self.compiler.begin_list();
-        self.expect(TokenValue::Char('('))?;
+        compiler!(self).begin_list();
+        self.expect(TOK_LPAR)?;
         match &self.peek.value {
             TokenValue::Keyword(_) => self.special_form()?,
-            TokenValue::Char(')') => self.compiler.emit_constant(Object::Nil),
-            _ => return Err(self.error(format!("unexpected {}", self.peek.value))),
+            TokenValue::Char('(') => compiler!(self).emit_constant(Object::Nil),
+            _ => self.list_apply()?,
         };
-        self.expect(TokenValue::Char(')'))?;
-        self.compiler.end_list();
+        self.expect(TOK_RPAR)?;
+        compiler!(self).end_list();
+        Ok(())
+    }
+    fn list_apply(&mut self) -> Result<()> {
+        self.expression()?;
+        let mut n: u8 = 0;
+        while self.peek.value != TOK_RPAR {
+            self.expression()?;
+            n += 1;
+        }
+        compiler!(self).emit_instruction(instruction_apply(n));
         Ok(())
     }
     fn ident(&mut self) -> Result<String> {
@@ -433,6 +441,8 @@ impl<'a> Parser<'a> {
             "if" => self.sform_if()?,
             "cond" => self.sform_cond()?,
             "equal?" => self.sform_equal()?,
+            "print" => self.sform_print()?,
+            "repr" => self.sform_repr()?,
             "+" => self.sform_arith(keyword)?,
             "-" => self.sform_arith(keyword)?,
             "*" => self.sform_arith(keyword)?,
@@ -450,85 +460,102 @@ impl<'a> Parser<'a> {
     fn sform_def(&mut self) -> Result<()> {
         let ident = self.ident()?;
         self.expression()?;
-        self.compiler.define_variable(ident)?;
-        self.compiler.emit_constant(Object::Nil);
+        compiler!(self).define_variable(ident)?;
+        compiler!(self).emit_constant(Object::Nil);
         Ok(())
     }
     fn sform_set(&mut self) -> Result<()> {
         let ident = self.ident()?;
         self.expression()?;
-        self.compiler.set_variable(ident)?;
-        self.compiler.emit_constant(Object::Nil);
+        compiler!(self).set_variable(ident)?;
+        compiler!(self).emit_constant(Object::Nil);
         Ok(())
     }
     fn sform_fn(&mut self) -> Result<()> {
-        todo!()
-    }
-    fn sform_let(&mut self) -> Result<()> {
-        self.compiler.begin_scope();
-        self.expect(TokenValue::Char('('))?;
-        while self.peek.value != TokenValue::Char(')') {
-            self.expect(TokenValue::Char('('))?;
+        self.compilers
+            .push(Compiler::new(Rc::new("unnamed".to_string())));
+        compiler!(self).begin_scope();
+        self.expect(TOK_LPAR)?;
+        while self.peek.value != TOK_RPAR {
             let ident = self.ident()?;
-            self.expression()?;
-            self.compiler.define_variable(ident)?;
-            self.expect(TokenValue::Char(')'))?;
+            compiler!(self).function.borrow_mut().arity += 1;
+            compiler!(self).define_variable(ident)?;
         }
-        self.expect(TokenValue::Char(')'))?;
-        while self.peek.value != TokenValue::Char(')') {
-            self.expression()?;
-            self.compiler.emit_instruction(instruction_pop_r0());
-        }
-        self.compiler.end_scope();
-        self.compiler.emit_instruction(instruction_push_r0());
+        self.expect(TOK_RPAR)?;
+        self.block()?;
+        let func = self.compilers.pop().unwrap().end();
+        compiler!(self).emit_constant(Object::Function(func));
         Ok(())
     }
-    fn sform_begin(&mut self) -> Result<()> {
+    fn sform_let(&mut self) -> Result<()> {
+        compiler!(self).begin_scope();
+        self.expect(TOK_LPAR)?;
+        while self.peek.value != TOK_RPAR {
+            self.expect(TOK_LPAR)?;
+            let ident = self.ident()?;
+            self.expression()?;
+            compiler!(self).define_variable(ident)?;
+            self.expect(TOK_RPAR)?;
+        }
+        self.expect(TOK_RPAR)?;
+        while self.peek.value != TOK_RPAR {
+            self.expression()?;
+            compiler!(self).emit_instruction(instruction_pop_r0());
+        }
+        compiler!(self).end_scope();
+        compiler!(self).emit_instruction(instruction_push_r0());
+        Ok(())
+    }
+    fn block(&mut self) -> Result<()> {
         // (begin): don't even bother, just return nil
-        if self.peek.value == TokenValue::Char(')') {
-            self.compiler.emit_constant(Object::Nil);
+        if self.peek.value == TOK_RPAR {
+            compiler!(self).emit_constant(Object::Nil);
             return Ok(());
         }
         // Save value of last expression in register, push it back at the end
-        self.compiler.begin_scope();
+        compiler!(self).begin_scope();
         while self.definition()? {
-            self.compiler.emit_instruction(instruction_pop_r0());
+            compiler!(self).emit_instruction(instruction_pop_r0());
         }
-        while self.peek.value != TokenValue::Char(')') {
+        while self.peek.value != TOK_RPAR {
             self.expression()?;
-            self.compiler.emit_instruction(instruction_pop_r0());
+            compiler!(self).emit_instruction(instruction_pop_r0());
         }
-        self.compiler.end_scope();
-        self.compiler.emit_instruction(instruction_push_r0());
+        compiler!(self).end_scope();
+        compiler!(self).emit_instruction(instruction_push_r0());
+        Ok(())
+    }
+    fn sform_begin(&mut self) -> Result<()> {
+        self.block()?;
         Ok(())
     }
     fn sform_if(&mut self) -> Result<()> {
-        let start = self.compiler.offset();
+        let start = compiler!(self).offset();
         self.expression()?;
         // If the predicate is a static expression, don't bother with jumps, just
         // compile the correct branch
-        if self.compiler.is_static_expr(start) {
-            let res = self.compiler.pre_evaluate(start).as_bool()?;
+        if compiler!(self).is_static_expr(start) {
+            let res = compiler!(self).pre_evaluate(start).as_bool()?;
             if res {
                 self.expression()?;
-                self.compiler.start_discard();
+                compiler!(self).start_discard();
                 self.expression()?;
-                self.compiler.end_discard();
+                compiler!(self).end_discard();
             } else {
-                self.compiler.start_discard();
+                compiler!(self).start_discard();
                 self.expression()?;
-                self.compiler.end_discard();
+                compiler!(self).end_discard();
                 self.expression()?;
             }
         } else {
-            let to_else = self.compiler.emit_jump(Op::JumpFalse);
-            self.compiler.emit_instruction(instruction_pop());
+            let to_else = compiler!(self).emit_jump(Op::JumpFalse);
+            compiler!(self).emit_instruction(instruction_pop());
             self.expression()?;
-            let to_end = self.compiler.emit_jump(Op::Jump);
-            self.compiler.patch_jump(to_else);
-            self.compiler.emit_instruction(instruction_pop());
+            let to_end = compiler!(self).emit_jump(Op::Jump);
+            compiler!(self).patch_jump(to_else);
+            compiler!(self).emit_instruction(instruction_pop());
             self.expression()?;
-            self.compiler.patch_jump(to_end);
+            compiler!(self).patch_jump(to_end);
         }
         Ok(())
     }
@@ -536,55 +563,65 @@ impl<'a> Parser<'a> {
         let mut to_end: Vec<usize> = vec![];
 
         let mut discard_rest = false;
-        while self.peek.value != TokenValue::Char(')') {
-            self.expect(TokenValue::Char('('))?;
-            let start = self.compiler.offset();
+        while self.peek.value != TOK_RPAR {
+            self.expect(TOK_LPAR)?;
+            let start = compiler!(self).offset();
             self.expression()?;
             if discard_rest {
                 self.expression()?;
-            } else if self.compiler.is_static_expr(start) {
-                if self.compiler.pre_evaluate(start).as_bool()? {
+            } else if compiler!(self).is_static_expr(start) {
+                if compiler!(self).pre_evaluate(start).as_bool()? {
                     self.expression()?;
-                    self.compiler.start_discard();
+                    compiler!(self).start_discard();
                     discard_rest = true;
                 } else {
-                    self.compiler.start_discard();
+                    compiler!(self).start_discard();
                     self.expression()?;
-                    self.compiler.end_discard();
+                    compiler!(self).end_discard();
                 }
             } else {
-                let skip = self.compiler.emit_jump(Op::JumpFalse);
-                self.compiler.emit_instruction(instruction_pop());
+                let skip = compiler!(self).emit_jump(Op::JumpFalse);
+                compiler!(self).emit_instruction(instruction_pop());
                 self.expression()?;
-                to_end.push(self.compiler.emit_jump(Op::Jump));
-                self.compiler.patch_jump(skip);
-                self.compiler.emit_instruction(instruction_pop());
+                to_end.push(compiler!(self).emit_jump(Op::Jump));
+                compiler!(self).patch_jump(skip);
+                compiler!(self).emit_instruction(instruction_pop());
             }
-            self.expect(TokenValue::Char(')'))?;
+            self.expect(TOK_RPAR)?;
         }
-        self.compiler.end_discard();
+        compiler!(self).end_discard();
         // In case no condition is fulfilled
         if !discard_rest {
-            self.compiler.emit_constant(Object::Nil);
+            compiler!(self).emit_constant(Object::Nil);
         }
         for jmp in to_end {
-            self.compiler.patch_jump(jmp);
+            compiler!(self).patch_jump(jmp);
         }
         Ok(())
     }
     fn sform_equal(&mut self) -> Result<()> {
         self.expression()?;
         self.expression()?;
-        self.compiler.emit_instruction(instruction_equal());
+        compiler!(self).emit_instruction(instruction_equal());
+        Ok(())
+    }
+    fn sform_print(&mut self) -> Result<()> {
+        self.expression()?;
+        compiler!(self).emit_instruction(instruction_print());
+        Ok(())
+    }
+    fn sform_repr(&mut self) -> Result<()> {
+        self.expression()?;
+        compiler!(self).emit_instruction(instruction_repr());
         Ok(())
     }
     fn sform_arith(&mut self, op: String) -> Result<()> {
         let mut nargs: usize = 0;
-        while self.peek.value != TokenValue::Char(')') {
+        while self.peek.value != TOK_RPAR {
             self.expression()?;
             nargs += 1;
         }
-        self.compiler.emit_instruction(match &op[..] {
+        compiler!(self).emit_instruction(match &op[..] {
             "+" => instruction_add(nargs),
             "-" => instruction_sub(nargs),
             "*" => instruction_mul(nargs),
@@ -596,7 +633,7 @@ impl<'a> Parser<'a> {
     fn sform_numcmp(&mut self, op: String) -> Result<()> {
         self.expression()?;
         self.expression()?;
-        self.compiler.emit_instruction(match &op[..] {
+        compiler!(self).emit_instruction(match &op[..] {
             "=" => instruction_num_eq(),
             "!=" => instruction_num_neq(),
             "<" => instruction_num_lt(),
@@ -612,6 +649,9 @@ impl<'a> Parser<'a> {
     }
     fn error(&self, reason: String) -> Error {
         self.error_at(&self.peek, reason)
+    }
+    fn end(mut self) -> FunctionRef {
+        compiler!(self).end()
     }
 }
 

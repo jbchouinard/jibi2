@@ -1,10 +1,12 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::chunk::Chunk;
 use crate::error::Result;
 use crate::ops::math::Number;
+use crate::vm::{CallFrame, CallStack, Stack};
 
 pub type IntType = i64;
 pub type FloatType = f64;
@@ -18,6 +20,7 @@ pub enum Object {
     Int(IntType),
     Float(FloatType),
     Function(FunctionRef),
+    NativeFunction(NativeFunctionRef),
 }
 
 impl fmt::Display for Object {
@@ -30,6 +33,7 @@ impl fmt::Display for Object {
             Self::Symbol(s) => write!(f, "{}", s),
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Function(func) => write!(f, "{}", func.borrow()),
+            Self::NativeFunction(func) => write!(f, "{}", func),
         }
     }
 }
@@ -64,17 +68,25 @@ impl Object {
     }
 }
 
+static FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+fn function_id() -> usize {
+    FUNCTION_COUNTER.fetch_add(0, Ordering::SeqCst)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    id: usize,
     pub name: Rc<String>,
     pub arity: usize,
     pub code: Chunk,
 }
 
 impl Function {
-    pub fn new() -> Self {
+    pub fn new(name: Rc<String>) -> Self {
         Self {
-            name: Rc::new("unnamed".to_string()),
+            id: function_id(),
+            name,
             arity: 0,
             code: Chunk::new(),
         }
@@ -88,9 +100,57 @@ pub type FunctionRef = Rc<RefCell<Function>>;
 
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "#[fn {}({})]", self.name, self.arity)
+        write!(f, "#[fn{}({}) {}]", self.id, self.arity, self.name)
     }
 }
+
+pub type NativeFn = Rc<dyn Fn(usize, &mut Stack) -> Result<()>>;
+
+static NATIVE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+fn native_function_id() -> usize {
+    NATIVE_FUNCTION_COUNTER.fetch_add(0, Ordering::SeqCst)
+}
+
+#[derive(Clone)]
+pub struct NativeFunction {
+    id: usize,
+    pub name: String,
+    f: NativeFn,
+}
+
+impl NativeFunction {
+    pub fn new(name: String, f: NativeFn) -> Self {
+        Self {
+            id: native_function_id(),
+            name,
+            f,
+        }
+    }
+    pub fn call(&self, nargs: usize, stack: &mut Stack) -> Result<()> {
+        (self.f)(nargs, stack)
+    }
+}
+
+impl PartialEq for NativeFunction {
+    fn eq(&self, other: &NativeFunction) -> bool {
+        self.id == other.id
+    }
+}
+
+impl fmt::Display for NativeFunction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#[builtin{} {}]", self.id, self.name)
+    }
+}
+
+impl fmt::Debug for NativeFunction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "NativeFunction({}, {})", self.id, self.name)
+    }
+}
+
+pub type NativeFunctionRef = Rc<NativeFunction>;
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -107,4 +167,24 @@ impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "expected value of type {}", self.etype)
     }
+}
+
+fn printsize<T>(name: &str) {
+    println!("size of {}: {} bytes", name, std::mem::size_of::<T>());
+}
+
+pub fn debug_print_object_sizes() {
+    printsize::<bool>("Bool");
+    printsize::<IntType>("Int");
+    printsize::<FloatType>("Float");
+    printsize::<String>("String");
+    printsize::<Rc<String>>("StringRef");
+    printsize::<Function>("Function");
+    printsize::<FunctionRef>("FunctionRef");
+    printsize::<NativeFunction>("NativeFunction");
+    printsize::<NativeFunctionRef>("NativeFunctionRef");
+    printsize::<Object>("Value");
+    printsize::<Stack>("Stack");
+    printsize::<CallFrame>("CallFrame");
+    printsize::<CallStack>("CallStack");
 }

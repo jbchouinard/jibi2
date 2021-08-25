@@ -3,7 +3,7 @@ use std::fmt;
 pub mod tokenizer;
 
 pub use tokenizer::{
-    LexError, Token, TokenProducer, TokenToIter, TokenValidator, TokenValue, Tokenizer,
+    LexError, Result, Token, TokenProducer, TokenToIter, TokenValidator, TokenValue, Tokenizer,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -24,7 +24,7 @@ impl PositionTag {
 }
 
 impl fmt::Display for PositionTag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}:{}", self.filename, self.lineno, self.col)
     }
 }

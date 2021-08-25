@@ -4,6 +4,7 @@ pub mod compiler;
 pub mod debug;
 pub mod error;
 pub mod instruction;
+pub mod native;
 pub mod object;
 pub mod ops;
 pub mod reader;

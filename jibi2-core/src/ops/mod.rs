@@ -6,14 +6,10 @@ pub use math::*;
 
 #[macro_export]
 macro_rules! vararg_op {
-    ($name:ident, $args:ident, $b:block) => {
+    ($name:ident, $nargs:ident, $stack:ident $b:block) => {
         #[inline(always)]
-        pub fn $name(stack: &mut $crate::vm::Stack, nargs: usize) -> crate::error::Result<()> {
-            let mut $args: Vec<Object> = vec![];
-            for _ in 0..nargs {
-                $args.push(stack.pop());
-            }
-            stack.push($b);
+        pub fn $name($stack: &mut $crate::vm::Stack, $nargs: usize) -> crate::error::Result<()> {
+            $b;
             Ok(())
         }
     };

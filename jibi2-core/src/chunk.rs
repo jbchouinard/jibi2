@@ -30,7 +30,7 @@ impl Chunk {
         for (n, line_len) in self.lines.iter().enumerate() {
             eol_offset += line_len;
             if eol_offset > offset {
-                return n;
+                return n + 1;
             }
         }
         self.lines.len()

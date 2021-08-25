@@ -41,6 +41,9 @@ impl fmt::Display for Op {
                 Op::Jump => "OP_JUMP",
                 Op::JumpTrue => "OP_JUMP_IF_TRUE",
                 Op::JumpFalse => "OP_JUMP_IF_FALSE",
+                Op::Apply => "OP_APPLY",
+                Op::Repr => "OP_REPR",
+                Op::Print => "OP_PRINT",
             }
         )
     }

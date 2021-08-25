@@ -1,24 +1,17 @@
 [package]
 name = "jibi2"
-description = "An interpreted Scheme dialect."
-version = "0.0.2"
+description = "Interpreter for the jibi2 Scheme dialect."
+version = "0.1.0"
 authors = ["Jérome Boisvert-Chouinard"]
 repository = "https://github.com/jbchouinard/jibi2"
 license = "MIT"
 readme = "README.md"
 edition = "2018"
 
-[lib]
-name = "jibi2"
-path = "src/lib.rs"
-
-[[bin]]
-name = "jibi2"
-path = "src/main.rs"
+[workspace]
 
 [dependencies]
+jibi2-core = { path = "jibi2-core" }
 home = "0.5.3"
-lazy_static = "1.4.0"
-regex = "1.5.4"
 rustyline = "8.2"
 structopt = "0.3"
