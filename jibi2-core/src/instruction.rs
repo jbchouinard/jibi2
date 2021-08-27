@@ -14,6 +14,8 @@ pub enum Op {
     GetLocalLong,
     SetLocal,
     SetLocalLong,
+    GetUpvalue,
+    SetUpvalue,
     Constant,
     ConstantLong,
     Jump,
@@ -54,6 +56,8 @@ pub const OP_GET_LOCAL: u8 = Op::GetLocal as u8;
 pub const OP_GET_LOCAL_LONG: u8 = Op::GetLocalLong as u8;
 pub const OP_SET_LOCAL: u8 = Op::SetLocal as u8;
 pub const OP_SET_LOCAL_LONG: u8 = Op::SetLocalLong as u8;
+pub const OP_GET_UPVALUE: u8 = Op::GetUpvalue as u8;
+pub const OP_SET_UPVALUE: u8 = Op::SetUpvalue as u8;
 pub const OP_CONSTANT: u8 = Op::Constant as u8;
 pub const OP_CONSTANT_LONG: u8 = Op::ConstantLong as u8;
 pub const OP_RETURN: u8 = Op::Return as u8;
@@ -185,6 +189,8 @@ instruction_var!(instruction_get_local, Op::GetLocal, Op::GetLocalLong);
 instruction_short!(instruction_set_local_short, Op::SetLocal);
 instruction_long!(instruction_set_local_long, Op::SetLocalLong);
 instruction_var!(instruction_set_local, Op::SetLocal, Op::SetLocalLong);
+instruction_short!(instruction_get_upvalue, Op::GetUpvalue);
+instruction_short!(instruction_set_upvalue, Op::SetUpvalue);
 instruction_short!(instruction_constant_short, Op::Constant);
 instruction_long!(instruction_constant_long, Op::ConstantLong);
 instruction_var!(instruction_constant, Op::Constant, Op::ConstantLong);
@@ -310,6 +316,8 @@ impl AnyInstruction {
             OP_GET_LOCAL_LONG => op2!(instruction_get_local_long, code, pos),
             OP_SET_LOCAL => op1!(instruction_set_local_short, code, pos),
             OP_SET_LOCAL_LONG => op2!(instruction_set_local_long, code, pos),
+            OP_GET_UPVALUE => op1!(instruction_get_upvalue, code, pos),
+            OP_SET_UPVALUE => op1!(instruction_set_upvalue, code, pos),
             OP_CONSTANT => op1!(instruction_constant_short, code, pos),
             OP_CONSTANT_LONG => op2!(instruction_constant_long, code, pos),
             OP_RETURN => op0!(instruction_return, code, pos),

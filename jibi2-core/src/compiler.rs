@@ -12,7 +12,7 @@ const TOK_LPAR: TokenValue = TokenValue::Char('(');
 const TOK_RPAR: TokenValue = TokenValue::Char(')');
 
 pub fn compile_tokens(name: &str, producer: Box<dyn TokenProducer>) -> Result<FunctionRef> {
-    let compiler = Compiler::new(Rc::new(name.to_string()));
+    let compiler = Compiler::new(Rc::new(name.to_string())).boxed();
     let mut parser = Parser::new(compiler, producer);
     parser.advance()?;
     parser.parse()?;
@@ -36,18 +36,34 @@ impl Local {
     }
 }
 
+#[derive(Debug)]
+pub struct Upvalue {
+    name: String,
+    var: Variable,
+}
+
+impl Upvalue {
+    pub fn new(name: String, var: Variable) -> Self {
+        Self { name, var }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Variable {
     Global,
     Local(usize),
+    Upvalue(usize),
 }
 
 pub struct Compiler {
     function: FunctionRef,
     scope_depth: i32,
     locals: Vec<Local>,
+    upvalues: Vec<Upvalue>,
     lists: Vec<usize>,
     pos: PositionTag,
     discard: bool,
+    enclosing: Option<Box<Compiler>>,
 }
 
 impl Compiler {
@@ -57,10 +73,18 @@ impl Compiler {
             function: function.into_ref(),
             scope_depth: 0,
             locals: vec![Local::new("".to_string(), 0)],
+            upvalues: vec![],
             lists: vec![],
             pos: PositionTag::new("", 0, 0),
             discard: false,
+            enclosing: None,
         }
+    }
+    pub fn boxed(self) -> Box<Self> {
+        Box::new(self)
+    }
+    pub fn encloses(&mut self, compiler: Box<Compiler>) {
+        self.enclosing = Some(compiler);
     }
     fn offset(&self) -> usize {
         self.function.borrow().code.count()
@@ -140,18 +164,45 @@ impl Compiler {
             Ok(())
         }
     }
-    fn resolve_variable(&mut self, name: &str) -> Variable {
-        if self.discard {
-            return Variable::Global;
+    fn resolve_upvalue(&mut self, name: &str) -> Option<Variable> {
+        match &mut self.enclosing {
+            Some(enclosing) => {
+                let var = match enclosing.resolve_local(name) {
+                    Some(Variable::Local(i)) => Variable::Local(i),
+                    Some(Variable::Upvalue(i)) => Variable::Upvalue(i),
+                    _ => return None,
+                };
+                Some(Variable::Upvalue(self.add_upvalue(name, var)))
+            }
+            None => None,
         }
+    }
+    fn add_upvalue(&mut self, name: &str, var: Variable) -> usize {
+        for (i, uv) in self.upvalues.iter().enumerate() {
+            if uv.name == name && uv.var == var {
+                return i;
+            }
+        }
+        self.function.borrow_mut().upvalues.push(var.clone());
+        self.upvalues.push(Upvalue::new(name.to_string(), var));
+        self.upvalues.len() - 1
+    }
+    fn resolve_local(&mut self, name: &str) -> Option<Variable> {
         if !self.locals.is_empty() {
             for i in (0..self.locals.len()).rev() {
                 if self.locals[i].name == name {
-                    return Variable::Local(i);
+                    return Some(Variable::Local(i));
                 }
             }
         }
-        Variable::Global
+        self.resolve_upvalue(name)
+    }
+    fn resolve_variable(&mut self, name: &str) -> Variable {
+        match self.resolve_local(name) {
+            Some(Variable::Local(i)) => Variable::Local(i),
+            Some(Variable::Upvalue(i)) => Variable::Upvalue(i),
+            _ => Variable::Global,
+        }
     }
     fn get_variable(&mut self, name: String) -> Result<()> {
         if self.discard {
@@ -165,6 +216,11 @@ impl Compiler {
             }
             Variable::Local(n) => {
                 self.emit_instruction(instruction_get_local(n));
+            }
+            Variable::Upvalue(n) => {
+                self.emit_instruction(instruction_get_upvalue(
+                    n.try_into().expect("too many upvalues"),
+                ));
             }
         }
         Ok(())
@@ -181,6 +237,11 @@ impl Compiler {
             }
             Variable::Local(n) => {
                 self.emit_instruction(instruction_set_local(n));
+            }
+            Variable::Upvalue(n) => {
+                self.emit_instruction(instruction_set_upvalue(
+                    n.try_into().expect("too many upvalues"),
+                ));
             }
         }
         Ok(())
@@ -245,7 +306,7 @@ impl Compiler {
             .disassemble("static expression", start);
 
         let mut vm = VM::new();
-        let closure = Closure::new(self.function.borrow().clone()).into_ref();
+        let closure = Closure::new(self.function.borrow().clone(), None).into_ref();
         vm.stack.push(Object::Closure(Rc::clone(&closure)));
         vm.frames.push(CallFrame::new(closure, start, 0));
         let res = vm.run().unwrap().unwrap();
@@ -271,7 +332,7 @@ impl Compiler {
         }
         true
     }
-    pub fn end(&mut self) -> FunctionRef {
+    pub fn end(&mut self) -> (Option<Box<Compiler>>, FunctionRef) {
         self.emit_instruction(instruction_return());
 
         #[cfg(debug_trace_compile)]
@@ -279,10 +340,13 @@ impl Compiler {
             .borrow()
             .code
             .disassemble(&format!("{}", self.function.borrow()), 0);
-        std::mem::replace(
+
+        let enclosing = self.enclosing.take();
+        let function = std::mem::replace(
             &mut self.function,
             Function::new(Rc::new("".to_string())).into_ref(),
-        )
+        );
+        (enclosing, function)
     }
 }
 
@@ -290,22 +354,16 @@ pub struct Parser {
     producer: Box<dyn TokenProducer>,
     peek: Token,
     stashed_next: Option<Token>,
-    compilers: Vec<Compiler>,
-}
-
-macro_rules! compiler {
-    ($self:ident) => {
-        $self.compilers.last_mut().unwrap()
-    };
+    compiler: Box<Compiler>,
 }
 
 impl Parser {
-    pub fn new(compiler: Compiler, producer: Box<dyn TokenProducer>) -> Self {
+    pub fn new(compiler: Box<Compiler>, producer: Box<dyn TokenProducer>) -> Self {
         Self {
             producer,
             peek: Token::new(TokenValue::None, PositionTag::new("", 1, 0)),
             stashed_next: None,
-            compilers: vec![compiler],
+            compiler,
         }
     }
     fn advance(&mut self) -> Result<Token> {
@@ -317,7 +375,7 @@ impl Parser {
         if next.value == TokenValue::Eof {
             return Err(self.error_at(&next, "reached EOF".to_string()));
         }
-        compiler!(self).pos = self.peek.pos.clone();
+        self.compiler.pos = self.peek.pos.clone();
         Ok(next)
     }
     fn rewind(&mut self, tok: Token) {
@@ -336,13 +394,13 @@ impl Parser {
     pub fn parse(&mut self) -> Result<()> {
         // Empty program, return nil
         if self.peek.value == TokenValue::Eof {
-            compiler!(self).emit_constant(Object::Nil);
+            self.compiler.emit_constant(Object::Nil);
             return Ok(());
         }
         while self.peek.value != TokenValue::Eof {
             self.top_level_expression()?;
             if self.peek.value != TokenValue::Eof {
-                compiler!(self).emit_instruction(instruction_pop());
+                self.compiler.emit_instruction(instruction_pop());
             }
         }
         Ok(())
@@ -373,10 +431,10 @@ impl Parser {
     fn atom(&mut self) -> Result<()> {
         let current = self.advance()?;
         match current.value {
-            TokenValue::Int(n) => compiler!(self).emit_constant(Object::Int(n)),
-            TokenValue::Float(x) => compiler!(self).emit_constant(Object::Float(x)),
-            TokenValue::String(s) => compiler!(self).emit_constant(Object::String(Rc::new(s))),
-            TokenValue::Ident(s) => compiler!(self).get_variable(s)?,
+            TokenValue::Int(n) => self.compiler.emit_constant(Object::Int(n)),
+            TokenValue::Float(x) => self.compiler.emit_constant(Object::Float(x)),
+            TokenValue::String(s) => self.compiler.emit_constant(Object::String(Rc::new(s))),
+            TokenValue::Ident(s) => self.compiler.get_variable(s)?,
             TokenValue::Keyword(k) => self.atom_const(k)?,
             _ => return Err(self.error_at(&current, format!("unexpected {}", current.value))),
         };
@@ -384,23 +442,23 @@ impl Parser {
     }
     pub fn atom_const(&mut self, sym: String) -> Result<()> {
         match &sym[..] {
-            "nil" => compiler!(self).emit_constant(Object::Nil),
-            "true" => compiler!(self).emit_constant(Object::Bool(true)),
-            "false" => compiler!(self).emit_constant(Object::Bool(false)),
+            "nil" => self.compiler.emit_constant(Object::Nil),
+            "true" => self.compiler.emit_constant(Object::Bool(true)),
+            "false" => self.compiler.emit_constant(Object::Bool(false)),
             _ => return Err(self.error(format!("ill-formed special form {}", sym))),
         }
         Ok(())
     }
     fn list(&mut self) -> Result<()> {
-        compiler!(self).begin_list();
+        self.compiler.begin_list();
         self.expect(TOK_LPAR)?;
         match &self.peek.value {
             TokenValue::Keyword(_) => self.special_form()?,
-            TokenValue::Char('(') => compiler!(self).emit_constant(Object::Nil),
+            TokenValue::Char(')') => self.compiler.emit_constant(Object::Nil),
             _ => self.list_apply()?,
         };
         self.expect(TOK_RPAR)?;
-        compiler!(self).end_list();
+        self.compiler.end_list();
         Ok(())
     }
     fn list_apply(&mut self) -> Result<()> {
@@ -410,7 +468,7 @@ impl Parser {
             self.expression()?;
             n += 1;
         }
-        compiler!(self).emit_instruction(instruction_apply(n));
+        self.compiler.emit_instruction(instruction_apply(n));
         Ok(())
     }
     fn ident(&mut self) -> Result<String> {
@@ -459,89 +517,96 @@ impl Parser {
     fn sform_def(&mut self) -> Result<()> {
         let ident = self.ident()?;
         self.expression()?;
-        compiler!(self).define_variable(ident)?;
-        compiler!(self).emit_constant(Object::Nil);
+        self.compiler.define_variable(ident)?;
+        self.compiler.emit_constant(Object::Nil);
         Ok(())
     }
     fn sform_set(&mut self) -> Result<()> {
         let ident = self.ident()?;
         self.expression()?;
-        compiler!(self).set_variable(ident)?;
-        compiler!(self).emit_constant(Object::Nil);
+        self.compiler.set_variable(ident)?;
+        self.compiler.emit_constant(Object::Nil);
         Ok(())
     }
     fn sform_fn(&mut self) -> Result<()> {
-        self.compilers
-            .push(Compiler::new(Rc::new("unnamed".to_string())));
-        compiler!(self).begin_scope();
+        let prev_compiler = std::mem::replace(
+            &mut self.compiler,
+            Compiler::new(Rc::new("unnamed".to_string())).boxed(),
+        );
+        self.compiler.encloses(prev_compiler);
+
+        self.compiler.begin_scope();
         self.expect(TOK_LPAR)?;
         while self.peek.value != TOK_RPAR {
             let ident = self.ident()?;
-            compiler!(self).function.borrow_mut().arity += 1;
-            compiler!(self).define_variable(ident)?;
+            self.compiler.function.borrow_mut().arity += 1;
+            self.compiler.define_variable(ident)?;
         }
         self.expect(TOK_RPAR)?;
         self.block()?;
-        let func = self.compilers.pop().unwrap().end();
-        let n = compiler!(self).add_constant(Object::Function(func));
-        compiler!(self).emit_instruction(instruction_closure(n));
+        let (prev_compiler, func) = self.compiler.end();
+        self.compiler = prev_compiler.unwrap();
+
+        let n = self.compiler.add_constant(Object::Function(func));
+        self.compiler.emit_instruction(instruction_closure(n));
         Ok(())
     }
     fn sform_let(&mut self) -> Result<()> {
-        compiler!(self).begin_scope();
+        self.compiler.begin_scope();
         self.expect(TOK_LPAR)?;
         while self.peek.value != TOK_RPAR {
             self.expect(TOK_LPAR)?;
             let ident = self.ident()?;
             self.expression()?;
-            compiler!(self).define_variable(ident)?;
+            self.compiler.define_variable(ident)?;
             self.expect(TOK_RPAR)?;
         }
         self.expect(TOK_RPAR)?;
         while self.peek.value != TOK_RPAR {
             self.expression()?;
-            compiler!(self).emit_instruction(instruction_pop_r0());
+            self.compiler.emit_instruction(instruction_pop_r0());
         }
-        compiler!(self).end_scope();
-        compiler!(self).emit_instruction(instruction_push_r0());
+        self.compiler.end_scope();
+        self.compiler.emit_instruction(instruction_push_r0());
         Ok(())
     }
     fn block(&mut self) -> Result<()> {
-        // (begin): don't even bother, just return nil
+        // An empty block evaluates to nil
         if self.peek.value == TOK_RPAR {
-            compiler!(self).emit_constant(Object::Nil);
+            self.compiler.emit_constant(Object::Nil);
             return Ok(());
         }
         // A block (begin, let, fn) evaluates to the result of the last expression.
         // So we pop the result of all the expressions except the last.
         let mut any_locals = false;
-        compiler!(self).begin_scope();
+        self.compiler.begin_scope();
         while self.definition()? {
             any_locals = true;
             if self.peek.value != TOK_RPAR {
-                compiler!(self).emit_instruction(instruction_pop());
+                self.compiler.emit_instruction(instruction_pop());
             }
         }
         while self.peek.value != TOK_RPAR {
             self.expression()?;
             if self.peek.value != TOK_RPAR {
-                compiler!(self).emit_instruction(instruction_pop());
+                self.compiler.emit_instruction(instruction_pop());
             }
         }
-        // If there are were local variable definitions, the stack will look like:
-        // [<local>, ..., <local>, <result>]
-        // So we save result to R0, end the scope, which emits OP_POP_N,
-        // then push back the result.
-        // If there were no locals then the stack is just [<result>], so we don't
-        // have to do anything.
+        // If there are were local variable definitions, the top of stack will look like:
+        //   <result>
+        //   <local>
+        //   ...
+        //   <local>
+        // So we save result to R0, end the scope, which pops locals, then push back
+        // the result.
         if any_locals {
-            compiler!(self).emit_instruction(instruction_pop_r0());
-        }
-
-        compiler!(self).end_scope();
-
-        if any_locals {
-            compiler!(self).emit_instruction(instruction_push_r0());
+            self.compiler.emit_instruction(instruction_pop_r0());
+            self.compiler.end_scope();
+            self.compiler.emit_instruction(instruction_push_r0());
+        // If there were no locals, ending the scope doesn't pop anything,
+        // so we don't have to all that.
+        } else {
+            self.compiler.end_scope();
         }
         Ok(())
     }
@@ -550,32 +615,32 @@ impl Parser {
         Ok(())
     }
     fn sform_if(&mut self) -> Result<()> {
-        let start = compiler!(self).offset();
+        let start = self.compiler.offset();
         self.expression()?;
         // If the predicate is a static expression, don't bother with jumps, just
         // compile the correct branch
-        if compiler!(self).is_static_expr(start) {
-            let res = compiler!(self).pre_evaluate(start).as_bool()?;
+        if self.compiler.is_static_expr(start) {
+            let res = self.compiler.pre_evaluate(start).as_bool()?;
             if res {
                 self.expression()?;
-                compiler!(self).start_discard();
+                self.compiler.start_discard();
                 self.expression()?;
-                compiler!(self).end_discard();
+                self.compiler.end_discard();
             } else {
-                compiler!(self).start_discard();
+                self.compiler.start_discard();
                 self.expression()?;
-                compiler!(self).end_discard();
+                self.compiler.end_discard();
                 self.expression()?;
             }
         } else {
-            let to_else = compiler!(self).emit_jump(Op::JumpFalse);
-            compiler!(self).emit_instruction(instruction_pop());
+            let to_else = self.compiler.emit_jump(Op::JumpFalse);
+            self.compiler.emit_instruction(instruction_pop());
             self.expression()?;
-            let to_end = compiler!(self).emit_jump(Op::Jump);
-            compiler!(self).patch_jump(to_else);
-            compiler!(self).emit_instruction(instruction_pop());
+            let to_end = self.compiler.emit_jump(Op::Jump);
+            self.compiler.patch_jump(to_else);
+            self.compiler.emit_instruction(instruction_pop());
             self.expression()?;
-            compiler!(self).patch_jump(to_end);
+            self.compiler.patch_jump(to_end);
         }
         Ok(())
     }
@@ -585,54 +650,54 @@ impl Parser {
         let mut discard_rest = false;
         while self.peek.value != TOK_RPAR {
             self.expect(TOK_LPAR)?;
-            let start = compiler!(self).offset();
+            let start = self.compiler.offset();
             self.expression()?;
             if discard_rest {
                 self.expression()?;
-            } else if compiler!(self).is_static_expr(start) {
-                if compiler!(self).pre_evaluate(start).as_bool()? {
+            } else if self.compiler.is_static_expr(start) {
+                if self.compiler.pre_evaluate(start).as_bool()? {
                     self.expression()?;
-                    compiler!(self).start_discard();
+                    self.compiler.start_discard();
                     discard_rest = true;
                 } else {
-                    compiler!(self).start_discard();
+                    self.compiler.start_discard();
                     self.expression()?;
-                    compiler!(self).end_discard();
+                    self.compiler.end_discard();
                 }
             } else {
-                let skip = compiler!(self).emit_jump(Op::JumpFalse);
-                compiler!(self).emit_instruction(instruction_pop());
+                let skip = self.compiler.emit_jump(Op::JumpFalse);
+                self.compiler.emit_instruction(instruction_pop());
                 self.expression()?;
-                to_end.push(compiler!(self).emit_jump(Op::Jump));
-                compiler!(self).patch_jump(skip);
-                compiler!(self).emit_instruction(instruction_pop());
+                to_end.push(self.compiler.emit_jump(Op::Jump));
+                self.compiler.patch_jump(skip);
+                self.compiler.emit_instruction(instruction_pop());
             }
             self.expect(TOK_RPAR)?;
         }
-        compiler!(self).end_discard();
+        self.compiler.end_discard();
         // In case no condition is fulfilled
         if !discard_rest {
-            compiler!(self).emit_constant(Object::Nil);
+            self.compiler.emit_constant(Object::Nil);
         }
         for jmp in to_end {
-            compiler!(self).patch_jump(jmp);
+            self.compiler.patch_jump(jmp);
         }
         Ok(())
     }
     fn sform_equal(&mut self) -> Result<()> {
         self.expression()?;
         self.expression()?;
-        compiler!(self).emit_instruction(instruction_equal());
+        self.compiler.emit_instruction(instruction_equal());
         Ok(())
     }
     fn sform_print(&mut self) -> Result<()> {
         self.expression()?;
-        compiler!(self).emit_instruction(instruction_print());
+        self.compiler.emit_instruction(instruction_print());
         Ok(())
     }
     fn sform_repr(&mut self) -> Result<()> {
         self.expression()?;
-        compiler!(self).emit_instruction(instruction_repr());
+        self.compiler.emit_instruction(instruction_repr());
         Ok(())
     }
     fn sform_arith(&mut self, op: String) -> Result<()> {
@@ -641,7 +706,7 @@ impl Parser {
             self.expression()?;
             nargs += 1;
         }
-        compiler!(self).emit_instruction(match &op[..] {
+        self.compiler.emit_instruction(match &op[..] {
             "+" => instruction_add(nargs),
             "-" => instruction_sub(nargs),
             "*" => instruction_mul(nargs),
@@ -653,7 +718,7 @@ impl Parser {
     fn sform_numcmp(&mut self, op: String) -> Result<()> {
         self.expression()?;
         self.expression()?;
-        compiler!(self).emit_instruction(match &op[..] {
+        self.compiler.emit_instruction(match &op[..] {
             "=" => instruction_num_eq(),
             "!=" => instruction_num_neq(),
             "<" => instruction_num_lt(),
@@ -671,7 +736,8 @@ impl Parser {
         self.error_at(&self.peek, reason)
     }
     fn end(mut self) -> FunctionRef {
-        compiler!(self).end()
+        let (_, func) = self.compiler.end();
+        func
     }
 }
 

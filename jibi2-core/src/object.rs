@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::chunk::Chunk;
+use crate::compiler::Variable;
 use crate::error::Result;
 use crate::ops::math::Number;
 use crate::vm::{CallFrame, CallStack, Stack};
@@ -34,7 +35,7 @@ impl fmt::Display for Object {
             Self::Symbol(s) => write!(f, "{}", s),
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Function(func) => write!(f, "{}", func.borrow()),
-            Self::Closure(clos) => write!(f, "{}", clos.function),
+            Self::Closure(clos) => write!(f, "{}", clos.borrow().function),
             Self::NativeFunction(func) => write!(f, "{}", func),
         }
     }
@@ -62,10 +63,16 @@ impl Object {
             _ => Err(TypeError::new("string".to_string()).into()),
         }
     }
-    pub fn as_function(&self) -> Result<Rc<RefCell<Function>>> {
+    pub fn as_function(&self) -> Result<FunctionRef> {
         match self {
             Object::Function(ref f) => Ok(Rc::clone(f)),
             _ => Err(TypeError::new("function".to_string()).into()),
+        }
+    }
+    pub fn as_closure(&self) -> Result<ClosureRef> {
+        match self {
+            Object::Closure(ref clos) => Ok(Rc::clone(clos)),
+            _ => Err(TypeError::new("closure".to_string()).into()),
         }
     }
 }
@@ -82,6 +89,7 @@ pub struct Function {
     pub name: Rc<String>,
     pub arity: usize,
     pub code: Chunk,
+    pub upvalues: Vec<Variable>,
 }
 
 pub type FunctionRef = Rc<RefCell<Function>>;
@@ -93,6 +101,7 @@ impl Function {
             name,
             arity: 0,
             code: Chunk::new(),
+            upvalues: vec![],
         }
     }
     pub fn into_ref(self) -> FunctionRef {
@@ -109,16 +118,41 @@ impl fmt::Display for Function {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Closure {
     pub function: Function,
+    pub enclosing: Option<ClosureRef>,
+    pub captured: Vec<Option<Object>>,
 }
 
-pub type ClosureRef = Rc<Closure>;
+pub type ClosureRef = Rc<RefCell<Closure>>;
 
 impl Closure {
-    pub fn new(func: Function) -> Self {
-        Self { function: func }
+    pub fn new(func: Function, enclosing: Option<ClosureRef>) -> Self {
+        Self {
+            function: func,
+            captured: vec![],
+            enclosing,
+        }
     }
     pub fn into_ref(self) -> ClosureRef {
-        Rc::new(self)
+        Rc::new(RefCell::new(self))
+    }
+    pub fn get_upvalue(&self, n: usize) -> Object {
+        match self.function.upvalues[n] {
+            Variable::Local(i) => self.captured[i - 1].as_ref().unwrap().clone(),
+            Variable::Upvalue(i) => self.enclosing.as_ref().unwrap().borrow().get_upvalue(i),
+            _ => panic!(),
+        }
+    }
+    pub fn set_upvalue(&mut self, n: usize, val: Object) {
+        match self.function.upvalues[n] {
+            Variable::Local(i) => self.captured[i - 1] = Some(val),
+            Variable::Upvalue(i) => self
+                .enclosing
+                .as_ref()
+                .unwrap()
+                .borrow_mut()
+                .set_upvalue(i, val),
+            _ => panic!(),
+        }
     }
 }
 

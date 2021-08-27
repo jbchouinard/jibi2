@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use hashbrown::HashMap;
 
-use crate::compiler::{compile_source, compile_tokens};
+use crate::compiler::{compile_source, compile_tokens, Variable};
 use crate::error::{ArgumentError, Error, Result, RuntimeError};
 use crate::instruction::*;
 use crate::native::add_native_functions;
@@ -47,11 +47,11 @@ impl VM {
     }
     pub fn load_source(&mut self, filename: &str, source: &str) -> Result<()> {
         let function = compile_source(filename, source)?.borrow().clone();
-        self.load(Closure::new(function).into_ref())
+        self.load(Closure::new(function, None).into_ref())
     }
     pub fn load_tokens(&mut self, name: &str, producer: Box<dyn TokenProducer>) -> Result<()> {
         let function = compile_tokens(name, producer)?.borrow().clone();
-        self.load(Closure::new(function).into_ref())
+        self.load(Closure::new(function, None).into_ref())
     }
     pub fn define_native(&mut self, name: &str, f: NativeFn) {
         let nf = NativeFunction::new(name.to_string(), f);
@@ -80,7 +80,7 @@ impl VM {
             Err(e) => {
                 let trace = self.stacktrace();
                 let offset = self.frames.peek_ref(0).ip;
-                let function = &self.frames.peek_ref(0).closure.function;
+                let function = &self.frames.peek_ref(0).closure.borrow().function;
                 let err = VMError {
                     err: e,
                     offset,
@@ -97,7 +97,7 @@ impl VM {
         for i in 0..self.frames.size {
             let frame = self.frames.get_ref(i);
             let offset = frame.ip - 1;
-            let function = &frame.closure.function;
+            let function = &frame.closure.borrow().function;
             trace.push(format!(
                 "Line {}, in {}",
                 function.code.get_line(offset),
@@ -120,7 +120,7 @@ impl VM {
         macro_rules! read_op {
             () => {{
                 let frame = mutframe!();
-                let op = frame.closure.function.code.code[frame.ip];
+                let op = frame.closure.borrow().function.code.code[frame.ip];
                 frame.ip += 1;
                 op
             }};
@@ -128,7 +128,7 @@ impl VM {
         macro_rules! read_short {
             () => {{
                 let frame = mutframe!();
-                let op = frame.closure.function.code.code[frame.ip];
+                let op = frame.closure.borrow().function.code.code[frame.ip];
                 frame.ip += 1;
                 op
             }};
@@ -136,8 +136,8 @@ impl VM {
         macro_rules! read_long {
             () => {{
                 let frame = mutframe!();
-                let op = (frame.closure.function.code.code[frame.ip] as u16) << 8
-                    | (frame.closure.function.code.code[frame.ip + 1] as u16);
+                let op = (frame.closure.borrow().function.code.code[frame.ip] as u16) << 8
+                    | (frame.closure.borrow().function.code.code[frame.ip + 1] as u16);
                 frame.ip += 2;
                 op
             }};
@@ -145,13 +145,13 @@ impl VM {
         macro_rules! read_constant_short {
             () => {{
                 let n = read_short!() as usize;
-                frame!().closure.function.code.constants[n].clone()
+                frame!().closure.borrow().function.code.constants[n].clone()
             }};
         }
         macro_rules! read_constant_long {
             () => {{
                 let n = read_long!() as usize;
-                frame!().closure.function.code.constants[n].clone()
+                frame!().closure.borrow().function.code.constants[n].clone()
             }};
         }
 
@@ -258,12 +258,21 @@ impl VM {
                 OP_SET_LOCAL => {
                     let val = self.stack.pop();
                     *self.stack.get_mut(frame!().fp + read_short!() as usize) = val;
-                    self.stack.push(Object::Nil)
                 }
                 OP_SET_LOCAL_LONG => {
                     let val = self.stack.pop();
                     *self.stack.get_mut(frame!().fp + read_short!() as usize) = val;
-                    self.stack.push(Object::Nil)
+                }
+                OP_GET_UPVALUE => {
+                    let n = read_short!();
+                    let closure = self.stack.get_ref(frame!().fp).as_closure()?;
+                    self.stack.push(closure.borrow().get_upvalue(n as usize));
+                }
+                OP_SET_UPVALUE => {
+                    let n = read_short!();
+                    let val = self.stack.pop();
+                    let closure = self.stack.get_ref(frame!().fp).as_closure()?;
+                    closure.borrow_mut().set_upvalue(n as usize, val);
                 }
                 OP_CONSTANT => {
                     self.stack.push(read_constant_short!());
@@ -273,15 +282,29 @@ impl VM {
                 }
                 OP_CLOSURE => {
                     let func = read_constant_short!().as_function()?;
-                    self.stack.push(Object::Closure(
-                        Closure::new(func.borrow().clone()).into_ref(),
-                    ));
+                    let enclosing = self.stack.get_ref(frame!().fp).as_closure()?;
+                    let mut closure = Closure::new(func.borrow().clone(), Some(enclosing));
+                    for uv in func.borrow().upvalues.iter() {
+                        closure.captured.push(match uv {
+                            Variable::Local(i) => Some(self.stack.get_ref(frame!().fp + i).clone()),
+                            Variable::Upvalue(_) => None,
+                            _ => panic!(),
+                        })
+                    }
+                    self.stack.push(Object::Closure(closure.into_ref()));
                 }
                 OP_CLOSURE_LONG => {
                     let func = read_constant_long!().as_function()?;
-                    self.stack.push(Object::Closure(
-                        Closure::new(func.borrow().clone()).into_ref(),
-                    ));
+                    let enclosing = self.stack.get_ref(frame!().fp).as_closure()?;
+                    let mut closure = Closure::new(func.borrow().clone(), Some(enclosing));
+                    for uv in func.borrow().upvalues.iter() {
+                        closure.captured.push(match uv {
+                            Variable::Local(i) => Some(self.stack.get_ref(frame!().fp + i).clone()),
+                            Variable::Upvalue(_) => None,
+                            _ => panic!(),
+                        })
+                    }
+                    self.stack.push(Object::Closure(closure.into_ref()));
                 }
                 OP_HALT => {
                     if self.stack.size == 0 {
@@ -295,7 +318,7 @@ impl VM {
                     let returning = self.frames.pop();
                     let result = self.stack.pop();
                     // Pop off arguments and function
-                    for _ in 0..returning.closure.function.arity + 1 {
+                    for _ in 0..returning.closure.borrow().function.arity + 1 {
                         self.stack.pop();
                     }
                     if self.frames.size == 0 {
@@ -309,7 +332,7 @@ impl VM {
                     let obj = self.stack.peek_ref(nargs).clone();
                     match obj {
                         Object::Closure(clos) => {
-                            let function = &clos.function;
+                            let function = &clos.borrow().function;
                             if function.arity != nargs {
                                 return Err(ArgumentError::new(format!(
                                     "expected {} arguments, got {}",
@@ -330,7 +353,7 @@ impl VM {
                         _ => return Err(TypeError::new("expected callable".to_string()).into()),
                     }
                 }
-                _ => panic!("invalid opcode"),
+                opcode => panic!("invalid opcode {}", opcode),
             }
         }
     }
@@ -361,6 +384,7 @@ impl VM {
         Self::printline();
         frame
             .closure
+            .borrow()
             .function
             .code
             .disassemble_instruction(frame.ip, frame.ip);

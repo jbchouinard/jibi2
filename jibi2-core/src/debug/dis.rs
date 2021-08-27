@@ -36,6 +36,8 @@ impl fmt::Display for Op {
                 Op::GetLocalLong => "OP_GET_LOCAL_LONG",
                 Op::SetLocal => "OP_SET_LOCAL",
                 Op::SetLocalLong => "OP_SET_LOCAL_LONG",
+                Op::GetUpvalue => "OP_GET_UPVALUE",
+                Op::SetUpvalue => "OP_SET_UPVALUE",
                 Op::Return => "OP_RETURN",
                 Op::Constant => "OP_CONSTANT",
                 Op::ConstantLong => "OP_CONSTANT_LONG",
