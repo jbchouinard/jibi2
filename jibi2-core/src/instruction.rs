@@ -2,10 +2,11 @@ pub struct Operand(u8);
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Op {
+    Halt,
     Pop,
     PopN,
-    PushR0,
     PopR0,
+    PushR0,
     DefGlobal,
     GetGlobal,
     SetGlobal,
@@ -15,75 +16,70 @@ pub enum Op {
     SetLocalLong,
     Constant,
     ConstantLong,
+    Jump,
+    JumpTrue,
+    JumpFalse,
+    Apply,
+    Closure,
+    ClosureLong,
     Return,
+    Repr,
+    Print,
     Equal,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    AddLong,
-    SubLong,
-    MulLong,
-    DivLong,
     NumEq,
     NumNeq,
     NumLt,
     NumLte,
     NumGt,
     NumGte,
-    Jump,
-    JumpTrue,
-    JumpFalse,
-    Apply,
-    Repr,
-    Print,
+    Add,
+    AddLong,
+    Sub,
+    SubLong,
+    Mul,
+    MulLong,
+    Div,
+    DivLong,
 }
 
-impl Op {
-    pub fn as_byte(self) -> u8 {
-        self as u8
-    }
-    pub fn from_byte(n: u8) -> Self {
-        match n {
-            n if n == Op::Pop as u8 => Op::Pop,
-            n if n == Op::PopN as u8 => Op::PopN,
-            n if n == Op::PushR0 as u8 => Op::PushR0,
-            n if n == Op::PopR0 as u8 => Op::PopR0,
-            n if n == Op::DefGlobal as u8 => Op::DefGlobal,
-            n if n == Op::GetGlobal as u8 => Op::GetGlobal,
-            n if n == Op::SetGlobal as u8 => Op::SetGlobal,
-            n if n == Op::GetLocal as u8 => Op::GetLocal,
-            n if n == Op::GetLocalLong as u8 => Op::GetLocalLong,
-            n if n == Op::SetLocal as u8 => Op::SetLocal,
-            n if n == Op::SetLocalLong as u8 => Op::SetLocalLong,
-            n if n == Op::Constant as u8 => Op::Constant,
-            n if n == Op::ConstantLong as u8 => Op::ConstantLong,
-            n if n == Op::Return as u8 => Op::Return,
-            n if n == Op::Add as u8 => Op::Add,
-            n if n == Op::Sub as u8 => Op::Sub,
-            n if n == Op::Mul as u8 => Op::Mul,
-            n if n == Op::Div as u8 => Op::Div,
-            n if n == Op::AddLong as u8 => Op::AddLong,
-            n if n == Op::SubLong as u8 => Op::SubLong,
-            n if n == Op::MulLong as u8 => Op::MulLong,
-            n if n == Op::DivLong as u8 => Op::DivLong,
-            n if n == Op::NumEq as u8 => Op::NumEq,
-            n if n == Op::NumNeq as u8 => Op::NumNeq,
-            n if n == Op::NumLt as u8 => Op::NumLt,
-            n if n == Op::NumLte as u8 => Op::NumLte,
-            n if n == Op::NumGt as u8 => Op::NumGt,
-            n if n == Op::NumGte as u8 => Op::NumGte,
-            n if n == Op::Equal as u8 => Op::Equal,
-            n if n == Op::Jump as u8 => Op::Jump,
-            n if n == Op::JumpTrue as u8 => Op::JumpTrue,
-            n if n == Op::JumpFalse as u8 => Op::JumpFalse,
-            n if n == Op::Apply as u8 => Op::Apply,
-            n if n == Op::Repr as u8 => Op::Repr,
-            n if n == Op::Print as u8 => Op::Print,
-            _ => panic!("invalid opcode {}", n),
-        }
-    }
-}
+pub const OP_HALT: u8 = Op::Halt as u8;
+pub const OP_POP: u8 = Op::Pop as u8;
+pub const OP_POP_N: u8 = Op::PopN as u8;
+pub const OP_POP_R0: u8 = Op::PopR0 as u8;
+pub const OP_PUSH_R0: u8 = Op::PushR0 as u8;
+pub const OP_DEF_GLOBAL: u8 = Op::DefGlobal as u8;
+pub const OP_GET_GLOBAL: u8 = Op::GetGlobal as u8;
+pub const OP_SET_GLOBAL: u8 = Op::SetGlobal as u8;
+pub const OP_GET_LOCAL: u8 = Op::GetLocal as u8;
+pub const OP_GET_LOCAL_LONG: u8 = Op::GetLocalLong as u8;
+pub const OP_SET_LOCAL: u8 = Op::SetLocal as u8;
+pub const OP_SET_LOCAL_LONG: u8 = Op::SetLocalLong as u8;
+pub const OP_CONSTANT: u8 = Op::Constant as u8;
+pub const OP_CONSTANT_LONG: u8 = Op::ConstantLong as u8;
+pub const OP_RETURN: u8 = Op::Return as u8;
+pub const OP_EQUAL: u8 = Op::Equal as u8;
+pub const OP_ADD: u8 = Op::Add as u8;
+pub const OP_SUB: u8 = Op::Sub as u8;
+pub const OP_MUL: u8 = Op::Mul as u8;
+pub const OP_DIV: u8 = Op::Div as u8;
+pub const OP_ADD_LONG: u8 = Op::AddLong as u8;
+pub const OP_SUB_LONG: u8 = Op::SubLong as u8;
+pub const OP_MUL_LONG: u8 = Op::MulLong as u8;
+pub const OP_DIV_LONG: u8 = Op::DivLong as u8;
+pub const OP_NUM_EQ: u8 = Op::NumEq as u8;
+pub const OP_NUM_NEQ: u8 = Op::NumNeq as u8;
+pub const OP_NUM_LT: u8 = Op::NumLt as u8;
+pub const OP_NUM_LTE: u8 = Op::NumLte as u8;
+pub const OP_NUM_GT: u8 = Op::NumGt as u8;
+pub const OP_NUM_GTE: u8 = Op::NumGte as u8;
+pub const OP_JUMP: u8 = Op::Jump as u8;
+pub const OP_JUMP_TRUE: u8 = Op::JumpTrue as u8;
+pub const OP_JUMP_FALSE: u8 = Op::JumpFalse as u8;
+pub const OP_APPLY: u8 = Op::Apply as u8;
+pub const OP_REPR: u8 = Op::Repr as u8;
+pub const OP_PRINT: u8 = Op::Print as u8;
+pub const OP_CLOSURE: u8 = Op::Closure as u8;
+pub const OP_CLOSURE_LONG: u8 = Op::ClosureLong as u8;
 
 pub struct Instruction<const N: usize> {
     pub op: Op,
@@ -91,6 +87,7 @@ pub struct Instruction<const N: usize> {
 }
 
 impl<const N: usize> Instruction<N> {
+    #[inline(always)]
     pub fn new(op: Op, operands: [u8; N]) -> Self {
         Self { op, operands }
     }
@@ -118,6 +115,7 @@ fn read_long_operands(operands: &[u8]) -> u16 {
 
 macro_rules! instruction_simple {
     ($f:ident, $op:expr) => {
+        #[inline(always)]
         pub fn $f() -> $crate::instruction::Instruction<0> {
             $crate::instruction::Instruction::new($op, [])
         }
@@ -125,6 +123,7 @@ macro_rules! instruction_simple {
 }
 macro_rules! instruction_short {
     ($f:ident, $op:expr) => {
+        #[inline(always)]
         pub fn $f(n: u8) -> $crate::instruction::Instruction<1> {
             $crate::instruction::Instruction::new($op, [n])
         }
@@ -132,6 +131,7 @@ macro_rules! instruction_short {
 }
 macro_rules! instruction_long {
     ($f:ident, $op:expr) => {
+        #[inline(always)]
         pub fn $f(n: u16) -> $crate::instruction::Instruction<2> {
             $crate::instruction::Instruction::new($op, make_long_operands(n))
         }
@@ -139,6 +139,7 @@ macro_rules! instruction_long {
 }
 macro_rules! instruction_var {
     ($f:ident, $opshort:expr, $oplong:expr) => {
+        #[inline(always)]
         pub fn $f(n: usize) -> $crate::instruction::AnyInstruction {
             if n <= u8::MAX as usize {
                 $crate::instruction::Instruction::<1>::new($opshort, [n as u8]).into()
@@ -152,6 +153,7 @@ macro_rules! instruction_var {
     };
 }
 
+instruction_simple!(instruction_halt, Op::Halt);
 instruction_short!(instruction_add_short, Op::Add);
 instruction_short!(instruction_sub_short, Op::Sub);
 instruction_short!(instruction_mul_short, Op::Mul);
@@ -194,6 +196,9 @@ instruction_long!(instruction_jump_if_false, Op::JumpFalse);
 instruction_short!(instruction_apply, Op::Apply);
 instruction_simple!(instruction_repr, Op::Repr);
 instruction_simple!(instruction_print, Op::Print);
+instruction_short!(instruction_closure_short, Op::Closure);
+instruction_long!(instruction_closure_long, Op::ClosureLong);
+instruction_var!(instruction_closure, Op::Closure, Op::ClosureLong);
 
 macro_rules! op0 {
     ($f:ident, $c:expr, $p:expr) => {
@@ -277,44 +282,46 @@ impl AnyInstruction {
     }
     pub fn read(code: &[u8], pos: usize) -> (Self, usize) {
         use AnyInstruction::*;
-        let opcode = code[pos];
-        let op = Op::from_byte(opcode);
-        match op {
-            Op::Add => op1!(instruction_add_short, code, pos),
-            Op::Sub => op1!(instruction_sub_short, code, pos),
-            Op::Mul => op1!(instruction_mul_short, code, pos),
-            Op::Div => op1!(instruction_div_short, code, pos),
-            Op::AddLong => op2!(instruction_add_long, code, pos),
-            Op::SubLong => op2!(instruction_sub_long, code, pos),
-            Op::MulLong => op2!(instruction_mul_long, code, pos),
-            Op::DivLong => op2!(instruction_div_long, code, pos),
-            Op::NumEq => op0!(instruction_num_eq, code, pos),
-            Op::NumNeq => op0!(instruction_num_neq, code, pos),
-            Op::NumLt => op0!(instruction_num_lt, code, pos),
-            Op::NumLte => op0!(instruction_num_lte, code, pos),
-            Op::NumGt => op0!(instruction_num_gt, code, pos),
-            Op::NumGte => op0!(instruction_num_gte, code, pos),
-            Op::Equal => op0!(instruction_equal, code, pos),
-            Op::PopR0 => op0!(instruction_pop_r0, code, pos),
-            Op::PushR0 => op0!(instruction_push_r0, code, pos),
-            Op::Pop => op0!(instruction_pop, code, pos),
-            Op::PopN => op1!(instruction_pop_n, code, pos),
-            Op::DefGlobal => op0!(instruction_def_global, code, pos),
-            Op::GetGlobal => op0!(instruction_get_global, code, pos),
-            Op::SetGlobal => op0!(instruction_set_global, code, pos),
-            Op::GetLocal => op1!(instruction_get_local_short, code, pos),
-            Op::GetLocalLong => op2!(instruction_get_local_long, code, pos),
-            Op::SetLocal => op1!(instruction_set_local_short, code, pos),
-            Op::SetLocalLong => op2!(instruction_set_local_long, code, pos),
-            Op::Constant => op1!(instruction_constant_short, code, pos),
-            Op::ConstantLong => op2!(instruction_constant_long, code, pos),
-            Op::Return => op0!(instruction_return, code, pos),
-            Op::Jump => op2!(instruction_jump, code, pos),
-            Op::JumpTrue => op2!(instruction_jump_if_true, code, pos),
-            Op::JumpFalse => op2!(instruction_jump_if_false, code, pos),
-            Op::Apply => op1!(instruction_apply, code, pos),
-            Op::Repr => op0!(instruction_repr, code, pos),
-            Op::Print => op0!(instruction_print, code, pos),
+        match code[pos] {
+            OP_HALT => op0!(instruction_halt, code, pos),
+            OP_ADD => op1!(instruction_add_short, code, pos),
+            OP_SUB => op1!(instruction_sub_short, code, pos),
+            OP_MUL => op1!(instruction_mul_short, code, pos),
+            OP_DIV => op1!(instruction_div_short, code, pos),
+            OP_ADD_LONG => op2!(instruction_add_long, code, pos),
+            OP_SUB_LONG => op2!(instruction_sub_long, code, pos),
+            OP_MUL_LONG => op2!(instruction_mul_long, code, pos),
+            OP_DIV_LONG => op2!(instruction_div_long, code, pos),
+            OP_NUM_EQ => op0!(instruction_num_eq, code, pos),
+            OP_NUM_NEQ => op0!(instruction_num_neq, code, pos),
+            OP_NUM_LT => op0!(instruction_num_lt, code, pos),
+            OP_NUM_LTE => op0!(instruction_num_lte, code, pos),
+            OP_NUM_GT => op0!(instruction_num_gt, code, pos),
+            OP_NUM_GTE => op0!(instruction_num_gte, code, pos),
+            OP_EQUAL => op0!(instruction_equal, code, pos),
+            OP_POP_R0 => op0!(instruction_pop_r0, code, pos),
+            OP_PUSH_R0 => op0!(instruction_push_r0, code, pos),
+            OP_POP => op0!(instruction_pop, code, pos),
+            OP_POP_N => op1!(instruction_pop_n, code, pos),
+            OP_DEF_GLOBAL => op0!(instruction_def_global, code, pos),
+            OP_GET_GLOBAL => op0!(instruction_get_global, code, pos),
+            OP_SET_GLOBAL => op0!(instruction_set_global, code, pos),
+            OP_GET_LOCAL => op1!(instruction_get_local_short, code, pos),
+            OP_GET_LOCAL_LONG => op2!(instruction_get_local_long, code, pos),
+            OP_SET_LOCAL => op1!(instruction_set_local_short, code, pos),
+            OP_SET_LOCAL_LONG => op2!(instruction_set_local_long, code, pos),
+            OP_CONSTANT => op1!(instruction_constant_short, code, pos),
+            OP_CONSTANT_LONG => op2!(instruction_constant_long, code, pos),
+            OP_RETURN => op0!(instruction_return, code, pos),
+            OP_JUMP => op2!(instruction_jump, code, pos),
+            OP_JUMP_TRUE => op2!(instruction_jump_if_true, code, pos),
+            OP_JUMP_FALSE => op2!(instruction_jump_if_false, code, pos),
+            OP_APPLY => op1!(instruction_apply, code, pos),
+            OP_REPR => op0!(instruction_repr, code, pos),
+            OP_PRINT => op0!(instruction_print, code, pos),
+            OP_CLOSURE => op1!(instruction_closure_short, code, pos),
+            OP_CLOSURE_LONG => op2!(instruction_closure_long, code, pos),
+            _ => panic!("invalid opcode"),
         }
     }
 }

@@ -20,6 +20,7 @@ pub enum Object {
     Int(IntType),
     Float(FloatType),
     Function(FunctionRef),
+    Closure(ClosureRef),
     NativeFunction(NativeFunctionRef),
 }
 
@@ -33,6 +34,7 @@ impl fmt::Display for Object {
             Self::Symbol(s) => write!(f, "{}", s),
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Function(func) => write!(f, "{}", func.borrow()),
+            Self::Closure(clos) => write!(f, "{}", clos.function),
             Self::NativeFunction(func) => write!(f, "{}", func),
         }
     }
@@ -82,6 +84,8 @@ pub struct Function {
     pub code: Chunk,
 }
 
+pub type FunctionRef = Rc<RefCell<Function>>;
+
 impl Function {
     pub fn new(name: Rc<String>) -> Self {
         Self {
@@ -91,16 +95,30 @@ impl Function {
             code: Chunk::new(),
         }
     }
-    pub fn to_ref(self) -> FunctionRef {
+    pub fn into_ref(self) -> FunctionRef {
         Rc::new(RefCell::new(self))
     }
 }
 
-pub type FunctionRef = Rc<RefCell<Function>>;
-
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "#[fn{}({}) {}]", self.id, self.arity, self.name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Closure {
+    pub function: Function,
+}
+
+pub type ClosureRef = Rc<Closure>;
+
+impl Closure {
+    pub fn new(func: Function) -> Self {
+        Self { function: func }
+    }
+    pub fn into_ref(self) -> ClosureRef {
+        Rc::new(self)
     }
 }
 

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::error::{Error, Result};
 use crate::instruction::*;
-use crate::object::{Function, FunctionRef, Object};
+use crate::object::{Closure, Function, FunctionRef, Object};
 use crate::reader::{PositionTag, Token, TokenProducer, TokenValue, Tokenizer};
 use crate::vm::{CallFrame, VM};
 
@@ -54,7 +54,7 @@ impl Compiler {
     pub fn new(name: Rc<String>) -> Self {
         let function = Function::new(name);
         Self {
-            function: function.to_ref(),
+            function: function.into_ref(),
             scope_depth: 0,
             locals: vec![Local::new("".to_string(), 0)],
             lists: vec![],
@@ -73,6 +73,9 @@ impl Compiler {
             .borrow_mut()
             .code
             .write_instruction(ins, self.pos.lineno);
+    }
+    fn add_constant(&mut self, val: Object) -> usize {
+        self.function.borrow_mut().code.add_constant(val)
     }
     fn emit_constant(&mut self, val: Object) {
         if self.discard {
@@ -233,7 +236,7 @@ impl Compiler {
         self.discard = false;
     }
     fn pre_evaluate(&mut self, start: usize) -> Object {
-        self.emit_instruction(instruction_return());
+        self.emit_instruction(instruction_halt());
 
         #[cfg(debug_trace_compile)]
         self.function
@@ -241,18 +244,14 @@ impl Compiler {
             .code
             .disassemble("static expression", start);
 
-        // Temporarily change arity to prevent popping on return
-        let real_arity = std::mem::replace(&mut self.function.borrow_mut().arity, 0);
-
         let mut vm = VM::new();
-        vm.stack.push(Object::Function(Rc::clone(&self.function)));
-        vm.frames
-            .push(CallFrame::new(Rc::clone(&self.function), start, 0));
+        let closure = Closure::new(self.function.borrow().clone()).into_ref();
+        vm.stack.push(Object::Closure(Rc::clone(&closure)));
+        vm.frames.push(CallFrame::new(closure, start, 0));
         vm.run().unwrap();
         let res = vm.register0.take().unwrap();
 
         self.function.borrow_mut().code.erase(start);
-        self.function.borrow_mut().arity = real_arity;
 
         #[cfg(debug_trace_compile)]
         println!("evaluated to: {}", res);
@@ -273,8 +272,12 @@ impl Compiler {
         }
         true
     }
-    pub fn end(&mut self) -> FunctionRef {
-        self.emit_instruction(instruction_return());
+    pub fn end(&mut self, halt: bool) -> FunctionRef {
+        if halt {
+            self.emit_instruction(instruction_halt());
+        } else {
+            self.emit_instruction(instruction_return());
+        }
         #[cfg(debug_trace_compile)]
         self.function
             .borrow()
@@ -282,7 +285,7 @@ impl Compiler {
             .disassemble(&format!("{}", self.function.borrow()), 0);
         std::mem::replace(
             &mut self.function,
-            Function::new(Rc::new("".to_string())).to_ref(),
+            Function::new(Rc::new("".to_string())).into_ref(),
         )
     }
 }
@@ -483,8 +486,9 @@ impl Parser {
         }
         self.expect(TOK_RPAR)?;
         self.block()?;
-        let func = self.compilers.pop().unwrap().end();
-        compiler!(self).emit_constant(Object::Function(func));
+        let func = self.compilers.pop().unwrap().end(false);
+        let n = compiler!(self).add_constant(Object::Function(func));
+        compiler!(self).emit_instruction(instruction_closure(n));
         Ok(())
     }
     fn sform_let(&mut self) -> Result<()> {
@@ -651,7 +655,7 @@ impl Parser {
         self.error_at(&self.peek, reason)
     }
     fn end(mut self) -> FunctionRef {
-        compiler!(self).end()
+        compiler!(self).end(true)
     }
 }
 

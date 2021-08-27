@@ -73,6 +73,14 @@ pub enum Number {
     Float(FloatType),
 }
 
+fn int_to_float(n: &IntType) -> Result<FloatType> {
+    let x = *n as FloatType;
+    if x as IntType != *n {
+        return Err(TypeError::new(format!("cannot convert int {} to float", n)).into());
+    }
+    Ok(x)
+}
+
 impl Number {
     pub fn from_val(val: Object) -> Result<Self> {
         match val {
@@ -90,13 +98,7 @@ impl Number {
     fn as_float(&self) -> Result<FloatType> {
         match self {
             Self::Float(x) => Ok(*x),
-            Self::Int(n) => {
-                let x = *n as FloatType;
-                if x as IntType != *n {
-                    return Err(TypeError::new(format!("cannot convert int {} to float", n)).into());
-                }
-                Ok(x)
-            }
+            Self::Int(n) => int_to_float(n),
         }
     }
     fn as_int(&self) -> Result<IntType> {

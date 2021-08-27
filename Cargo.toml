@@ -15,3 +15,6 @@ jibi2-core = { path = "jibi2-core" }
 home = "0.5.3"
 rustyline = "8.2"
 structopt = "0.3"
+
+[profile.release]
+debug = true

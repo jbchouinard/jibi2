@@ -1,12 +1,13 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
+use hashbrown::HashMap;
+
 use crate::compiler::{compile_source, compile_tokens};
 use crate::error::{ArgumentError, Error, Result};
-use crate::instruction::{AnyInstruction, Op};
+use crate::instruction::*;
 use crate::native::add_native_functions;
-use crate::object::{FunctionRef, NativeFn, NativeFunction, Object, TypeError};
+use crate::object::{Closure, ClosureRef, NativeFn, NativeFunction, Object, TypeError};
 use crate::ops::*;
 use crate::reader::TokenProducer;
 use crate::stack::ArrayStack;
@@ -39,18 +40,18 @@ impl VM {
             frames: CallStack::new(),
         }
     }
-    pub fn load(&mut self, function: FunctionRef) -> Result<()> {
-        self.frames.push(CallFrame::new(Rc::clone(&function), 0, 0));
-        self.stack.push(Object::Function(Rc::clone(&function)));
+    pub fn load(&mut self, closure: ClosureRef) -> Result<()> {
+        self.frames.push(CallFrame::new(Rc::clone(&closure), 0, 0));
+        self.stack.push(Object::Closure(Rc::clone(&closure)));
         Ok(())
     }
     pub fn load_source(&mut self, filename: &str, source: &str) -> Result<()> {
-        let function = compile_source(filename, source)?;
-        self.load(function)
+        let function = compile_source(filename, source)?.borrow().clone();
+        self.load(Closure::new(function).into_ref())
     }
     pub fn load_tokens(&mut self, name: &str, producer: Box<dyn TokenProducer>) -> Result<()> {
-        let function = compile_tokens(name, producer)?;
-        self.load(function)
+        let function = compile_tokens(name, producer)?.borrow().clone();
+        self.load(Closure::new(function).into_ref())
     }
     pub fn define_native(&mut self, name: &str, f: NativeFn) {
         let nf = NativeFunction::new(name.to_string(), f);
@@ -66,12 +67,20 @@ impl VM {
         self.frames = CallStack::new();
     }
     pub fn run(&mut self) -> RunResult<()> {
-        match self._run() {
+        let res = self._run();
+
+        #[cfg(debug_trace_execution)]
+        {
+            self.trace_state();
+            Self::printline();
+        }
+
+        match res {
             Ok(()) => Ok(()),
             Err(e) => {
                 let trace = self.stacktrace();
                 let offset = self.frames.peek_ref(0).ip;
-                let function = self.frames.peek_ref(0).function.borrow();
+                let function = &self.frames.peek_ref(0).closure.function;
                 let err = VMError {
                     err: e,
                     offset,
@@ -88,7 +97,7 @@ impl VM {
         for i in 0..self.frames.size {
             let frame = self.frames.get_ref(i);
             let offset = frame.ip - 1;
-            let function = frame.function.borrow();
+            let function = &frame.closure.function;
             trace.push(format!(
                 "Line {}, in {}",
                 function.code.get_line(offset),
@@ -108,33 +117,73 @@ impl VM {
                 self.frames.peek_mut(0)
             };
         }
+        macro_rules! read_op {
+            () => {{
+                let frame = mutframe!();
+                let op = frame.closure.function.code.code[frame.ip];
+                frame.ip += 1;
+                op
+            }};
+        }
+        macro_rules! read_short {
+            () => {{
+                let frame = mutframe!();
+                let op = frame.closure.function.code.code[frame.ip];
+                frame.ip += 1;
+                op
+            }};
+        }
+        macro_rules! read_long {
+            () => {{
+                let frame = mutframe!();
+                let op = (frame.closure.function.code.code[frame.ip] as u16) << 8
+                    | (frame.closure.function.code.code[frame.ip + 1] as u16);
+                frame.ip += 2;
+                op
+            }};
+        }
+        macro_rules! read_constant_short {
+            () => {{
+                let n = read_short!() as usize;
+                frame!().closure.function.code.constants[n].clone()
+            }};
+        }
+        macro_rules! read_constant_long {
+            () => {{
+                let n = read_long!() as usize;
+                frame!().closure.function.code.constants[n].clone()
+            }};
+        }
 
         loop {
             #[cfg(debug_trace_execution)]
-            self.trace_execution(frame!());
+            {
+                self.trace_state();
+                self.trace_instruction(frame!());
+            }
 
-            let (ins, mut newpos) =
-                AnyInstruction::read(&frame!().function.borrow().code.code, frame!().ip);
-            match ins.op() {
-                Op::Jump => {
-                    let offset = ins.get_usize();
-                    newpos += offset;
+            match read_op!() {
+                OP_JUMP => {
+                    let jmp = read_long!() as usize;
+                    mutframe!().ip += jmp;
                 }
-                Op::JumpTrue => {
+                OP_JUMP_TRUE => {
+                    let jmp = read_long!() as usize;
                     if self.peek(0).as_bool()? {
-                        newpos += ins.get_usize();
+                        mutframe!().ip += jmp;
                     }
                 }
-                Op::JumpFalse => {
+                OP_JUMP_FALSE => {
+                    let jmp = read_long!() as usize;
                     if !self.peek(0).as_bool()? {
-                        newpos += ins.get_usize();
+                        mutframe!().ip += jmp;
                     }
                 }
-                Op::Repr => {
+                OP_REPR => {
                     let val = self.stack.pop();
                     self.stack.push(Object::String(Rc::new(val.to_string())));
                 }
-                Op::Print => {
+                OP_PRINT => {
                     let val = self.stack.pop();
                     let s = match val {
                         Object::String(s) => s.to_string(),
@@ -143,35 +192,39 @@ impl VM {
                     println!("{}", s);
                     self.stack.push(Object::Nil);
                 }
-                Op::Add | Op::AddLong => op_add(&mut self.stack, ins.get_usize())?,
-                Op::Sub | Op::SubLong => op_sub(&mut self.stack, ins.get_usize())?,
-                Op::Mul | Op::MulLong => op_mul(&mut self.stack, ins.get_usize())?,
-                Op::Div | Op::DivLong => op_div(&mut self.stack, ins.get_usize())?,
-                Op::NumEq => op_num_eq(&mut self.stack)?,
-                Op::NumNeq => op_num_neq(&mut self.stack)?,
-                Op::NumLt => op_num_lt(&mut self.stack)?,
-                Op::NumLte => op_num_lte(&mut self.stack)?,
-                Op::NumGt => op_num_gt(&mut self.stack)?,
-                Op::NumGte => op_num_gte(&mut self.stack)?,
-                Op::Equal => op_equal(&mut self.stack)?,
-                Op::PopR0 => {
+                OP_ADD => op_add(&mut self.stack, read_short!() as usize)?,
+                OP_ADD_LONG => op_add(&mut self.stack, read_long!() as usize)?,
+                OP_SUB => op_sub(&mut self.stack, read_short!() as usize)?,
+                OP_SUB_LONG => op_sub(&mut self.stack, read_long!() as usize)?,
+                OP_MUL => op_mul(&mut self.stack, read_short!() as usize)?,
+                OP_MUL_LONG => op_mul(&mut self.stack, read_short!() as usize)?,
+                OP_DIV => op_div(&mut self.stack, read_short!() as usize)?,
+                OP_DIV_LONG => op_div(&mut self.stack, read_long!() as usize)?,
+                OP_NUM_EQ => op_num_eq(&mut self.stack)?,
+                OP_NUM_NEQ => op_num_neq(&mut self.stack)?,
+                OP_NUM_LT => op_num_lt(&mut self.stack)?,
+                OP_NUM_LTE => op_num_lte(&mut self.stack)?,
+                OP_NUM_GT => op_num_gt(&mut self.stack)?,
+                OP_NUM_GTE => op_num_gte(&mut self.stack)?,
+                OP_EQUAL => op_equal(&mut self.stack)?,
+                OP_POP_R0 => {
                     self.register0 = Some(self.stack.pop());
                 }
-                Op::PushR0 => self.stack.push(self.register0.take().unwrap()),
-                Op::Pop => {
+                OP_PUSH_R0 => self.stack.push(self.register0.take().unwrap()),
+                OP_POP => {
                     self.stack.pop();
                 }
-                Op::PopN => {
-                    for _ in 0..ins.get_operand(0) {
+                OP_POP_N => {
+                    for _ in 0..read_short!() {
                         self.stack.pop();
                     }
                 }
-                Op::DefGlobal => {
+                OP_DEF_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     let val = self.stack.pop();
                     self.globals.insert(sym, val);
                 }
-                Op::GetGlobal => {
+                OP_GET_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     match self.globals.get(&sym) {
                         Some(val) => self.stack.push(val.clone()),
@@ -180,7 +233,7 @@ impl VM {
                         }
                     }
                 }
-                Op::SetGlobal => {
+                OP_SET_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     let val = self.stack.pop();
                     match self.globals.get(&sym) {
@@ -192,49 +245,73 @@ impl VM {
                         }
                     }
                 }
-                Op::GetLocal | Op::GetLocalLong => self
-                    .stack
-                    .push(self.stack.get_ref(frame!().fp + ins.get_usize()).clone()),
-                Op::SetLocal | Op::SetLocalLong => {
+                OP_GET_LOCAL => self.stack.push(
+                    self.stack
+                        .get_ref(frame!().fp + read_short!() as usize)
+                        .clone(),
+                ),
+                OP_GET_LOCAL_LONG => self.stack.push(
+                    self.stack
+                        .get_ref(frame!().fp + read_long!() as usize)
+                        .clone(),
+                ),
+                OP_SET_LOCAL => {
                     let val = self.stack.pop();
-                    *self.stack.get_mut(frame!().fp + ins.get_usize()) = val;
+                    *self.stack.get_mut(frame!().fp + read_short!() as usize) = val;
                     self.stack.push(Object::Nil)
                 }
-                Op::Constant | Op::ConstantLong => self
-                    .stack
-                    .push(frame!().function.borrow().code.constants[ins.get_usize()].clone()),
-                Op::Return => {
+                OP_SET_LOCAL_LONG => {
+                    let val = self.stack.pop();
+                    *self.stack.get_mut(frame!().fp + read_short!() as usize) = val;
+                    self.stack.push(Object::Nil)
+                }
+                OP_CONSTANT => {
+                    self.stack.push(read_constant_short!());
+                }
+                OP_CONSTANT_LONG => {
+                    self.stack.push(read_constant_long!());
+                }
+                OP_CLOSURE => {
+                    let func = read_constant_short!().as_function()?;
+                    self.stack.push(Object::Closure(
+                        Closure::new(func.borrow().clone()).into_ref(),
+                    ));
+                }
+                OP_CLOSURE_LONG => {
+                    let func = read_constant_long!().as_function()?;
+                    self.stack.push(Object::Closure(
+                        Closure::new(func.borrow().clone()).into_ref(),
+                    ));
+                }
+                OP_HALT => {
+                    let result = self.stack.pop();
+                    self.register0 = Some(result);
+                    return Ok(());
+                }
+                OP_RETURN => {
                     let returning = self.frames.pop();
                     let result = self.stack.pop();
                     // Pop off arguments and function
-                    for _ in 0..returning.function.borrow().arity + 1 {
+                    for _ in 0..returning.closure.function.arity + 1 {
                         self.stack.pop();
                     }
-                    // Stash last return value in R0, finish
-                    if self.frames.size == 0 {
-                        self.register0 = Some(result);
-                        return Ok(());
-                    } else {
-                        self.stack.push(result);
-                    }
-                    continue;
+                    self.stack.push(result);
                 }
-                Op::Apply => {
-                    mutframe!().ip = newpos;
-                    let nargs = ins.get_usize();
-                    let function = self.stack.peek_ref(nargs).clone();
-                    match function {
-                        Object::Function(function) => {
-                            let arity = function.borrow().arity;
-                            if arity != nargs {
+                OP_APPLY => {
+                    let nargs = read_short!() as usize;
+                    let obj = self.stack.peek_ref(nargs).clone();
+                    match obj {
+                        Object::Closure(clos) => {
+                            let function = &clos.function;
+                            if function.arity != nargs {
                                 return Err(ArgumentError::new(format!(
                                     "expected {} arguments, got {}",
-                                    arity, nargs
+                                    function.arity, nargs
                                 ))
                                 .into());
                             }
-                            let fp = self.stack.size - arity - 1;
-                            self.frames.push(CallFrame::new(function, 0, fp));
+                            let fp = self.stack.size - function.arity - 1;
+                            self.frames.push(CallFrame::new(Rc::clone(&clos), 0, fp));
                         }
                         Object::NativeFunction(function) => {
                             function.call(nargs, &mut self.stack)?;
@@ -245,20 +322,18 @@ impl VM {
                         }
                         _ => return Err(TypeError::new("expected callable".to_string()).into()),
                     }
-                    continue;
                 }
+                _ => panic!("invalid opcode"),
             }
-            mutframe!().ip = newpos;
         }
     }
     #[cfg(debug_trace_execution)]
-    fn trace_execution(&self, frame: &CallFrame) {
+    fn printline() {
         println!("------------------------------------------------");
-        frame
-            .function
-            .borrow()
-            .code
-            .disassemble_instruction(frame.ip, frame.ip);
+    }
+    #[cfg(debug_trace_execution)]
+    fn trace_state(&self) {
+        Self::printline();
         print!("GLOBALS: ");
         for (k, v) in self.globals.iter() {
             print!("{}: {}, ", k, v)
@@ -274,17 +349,26 @@ impl VM {
         }
         println!();
     }
+    #[cfg(debug_trace_execution)]
+    fn trace_instruction(&self, frame: &CallFrame) {
+        Self::printline();
+        frame
+            .closure
+            .function
+            .code
+            .disassemble_instruction(frame.ip, frame.ip);
+    }
 }
 
 pub struct CallFrame {
-    function: FunctionRef,
+    closure: ClosureRef,
     ip: usize,
     fp: usize,
 }
 
 impl CallFrame {
-    pub fn new(function: FunctionRef, ip: usize, fp: usize) -> Self {
-        Self { function, ip, fp }
+    pub fn new(closure: ClosureRef, ip: usize, fp: usize) -> Self {
+        Self { closure, ip, fp }
     }
 }
 

@@ -9,6 +9,7 @@ impl fmt::Display for Op {
             f,
             "{:16}",
             match self {
+                Op::Halt => "OP_HALT",
                 Op::Add => "OP_ADD",
                 Op::Sub => "OP_SUB",
                 Op::Mul => "OP_MUL",
@@ -44,6 +45,8 @@ impl fmt::Display for Op {
                 Op::Apply => "OP_APPLY",
                 Op::Repr => "OP_REPR",
                 Op::Print => "OP_PRINT",
+                Op::Closure => "OP_CLOSURE",
+                Op::ClosureLong => "OP_CLOSURE_LONG",
             }
         )
     }
