@@ -10,7 +10,10 @@ pub enum Error {
     Syntax(SyntaxError),
     Type(TypeError),
     Argument(ArgumentError),
+    Runtime(RuntimeError),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -19,6 +22,7 @@ impl fmt::Display for Error {
             Self::Lex(e) => write!(f, "{}", e),
             Self::Type(e) => write!(f, "{}", e),
             Self::Argument(e) => write!(f, "{}", e),
+            Self::Runtime(e) => write!(f, "{}", e),
         }
     }
 }
@@ -47,7 +51,11 @@ impl From<ArgumentError> for Error {
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+impl From<RuntimeError> for Error {
+    fn from(e: RuntimeError) -> Self {
+        Self::Runtime(e)
+    }
+}
 
 #[derive(Debug)]
 pub struct ArgumentError {
@@ -63,5 +71,22 @@ impl ArgumentError {
 impl fmt::Display for ArgumentError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ArgumentError: {}", self.reason)
+    }
+}
+
+#[derive(Debug)]
+pub struct RuntimeError {
+    reason: String,
+}
+
+impl RuntimeError {
+    pub fn new(reason: String) -> Self {
+        Self { reason }
+    }
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "RuntimeError: {}", self.reason)
     }
 }

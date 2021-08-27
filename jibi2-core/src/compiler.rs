@@ -248,8 +248,7 @@ impl Compiler {
         let closure = Closure::new(self.function.borrow().clone()).into_ref();
         vm.stack.push(Object::Closure(Rc::clone(&closure)));
         vm.frames.push(CallFrame::new(closure, start, 0));
-        vm.run().unwrap();
-        let res = vm.register0.take().unwrap();
+        let res = vm.run().unwrap().unwrap();
 
         self.function.borrow_mut().code.erase(start);
 
@@ -272,12 +271,9 @@ impl Compiler {
         }
         true
     }
-    pub fn end(&mut self, halt: bool) -> FunctionRef {
-        if halt {
-            self.emit_instruction(instruction_halt());
-        } else {
-            self.emit_instruction(instruction_return());
-        }
+    pub fn end(&mut self) -> FunctionRef {
+        self.emit_instruction(instruction_return());
+
         #[cfg(debug_trace_compile)]
         self.function
             .borrow()
@@ -486,7 +482,7 @@ impl Parser {
         }
         self.expect(TOK_RPAR)?;
         self.block()?;
-        let func = self.compilers.pop().unwrap().end(false);
+        let func = self.compilers.pop().unwrap().end();
         let n = compiler!(self).add_constant(Object::Function(func));
         compiler!(self).emit_instruction(instruction_closure(n));
         Ok(())
@@ -516,17 +512,37 @@ impl Parser {
             compiler!(self).emit_constant(Object::Nil);
             return Ok(());
         }
-        // Save value of last expression in register, push it back at the end
+        // A block (begin, let, fn) evaluates to the result of the last expression.
+        // So we pop the result of all the expressions except the last.
+        let mut any_locals = false;
         compiler!(self).begin_scope();
         while self.definition()? {
-            compiler!(self).emit_instruction(instruction_pop_r0());
+            any_locals = true;
+            if self.peek.value != TOK_RPAR {
+                compiler!(self).emit_instruction(instruction_pop());
+            }
         }
         while self.peek.value != TOK_RPAR {
             self.expression()?;
+            if self.peek.value != TOK_RPAR {
+                compiler!(self).emit_instruction(instruction_pop());
+            }
+        }
+        // If there are were local variable definitions, the stack will look like:
+        // [<local>, ..., <local>, <result>]
+        // So we save result to R0, end the scope, which emits OP_POP_N,
+        // then push back the result.
+        // If there were no locals then the stack is just [<result>], so we don't
+        // have to do anything.
+        if any_locals {
             compiler!(self).emit_instruction(instruction_pop_r0());
         }
+
         compiler!(self).end_scope();
-        compiler!(self).emit_instruction(instruction_push_r0());
+
+        if any_locals {
+            compiler!(self).emit_instruction(instruction_push_r0());
+        }
         Ok(())
     }
     fn sform_begin(&mut self) -> Result<()> {
@@ -655,7 +671,7 @@ impl Parser {
         self.error_at(&self.peek, reason)
     }
     fn end(mut self) -> FunctionRef {
-        compiler!(self).end(true)
+        compiler!(self).end()
     }
 }
 

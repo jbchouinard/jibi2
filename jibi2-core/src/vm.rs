@@ -4,7 +4,7 @@ use std::rc::Rc;
 use hashbrown::HashMap;
 
 use crate::compiler::{compile_source, compile_tokens};
-use crate::error::{ArgumentError, Error, Result};
+use crate::error::{ArgumentError, Error, Result, RuntimeError};
 use crate::instruction::*;
 use crate::native::add_native_functions;
 use crate::object::{Closure, ClosureRef, NativeFn, NativeFunction, Object, TypeError};
@@ -66,7 +66,7 @@ impl VM {
         self.stack = Stack::new();
         self.frames = CallStack::new();
     }
-    pub fn run(&mut self) -> RunResult<()> {
+    pub fn run(&mut self) -> RunResult<Option<Object>> {
         let res = self._run();
 
         #[cfg(debug_trace_execution)]
@@ -76,7 +76,7 @@ impl VM {
         }
 
         match res {
-            Ok(()) => Ok(()),
+            Ok(res) => Ok(res),
             Err(e) => {
                 let trace = self.stacktrace();
                 let offset = self.frames.peek_ref(0).ip;
@@ -106,7 +106,7 @@ impl VM {
         }
         trace
     }
-    fn _run(&mut self) -> Result<()> {
+    fn _run(&mut self) -> Result<Option<Object>> {
         macro_rules! frame {
             () => {
                 self.frames.peek_ref(0)
@@ -229,7 +229,7 @@ impl VM {
                     match self.globals.get(&sym) {
                         Some(val) => self.stack.push(val.clone()),
                         None => {
-                            return Err(ArgumentError::new(format!("Undefined name {}", sym)).into())
+                            return Err(RuntimeError::new(format!("Undefined name {}", sym)).into())
                         }
                     }
                 }
@@ -241,7 +241,7 @@ impl VM {
                             self.globals.insert(sym, val);
                         }
                         None => {
-                            return Err(ArgumentError::new(format!("Undefined name {}", sym)).into())
+                            return Err(RuntimeError::new(format!("Undefined name {}", sym)).into())
                         }
                     }
                 }
@@ -284,9 +284,12 @@ impl VM {
                     ));
                 }
                 OP_HALT => {
-                    let result = self.stack.pop();
-                    self.register0 = Some(result);
-                    return Ok(());
+                    if self.stack.size == 0 {
+                        return Ok(None);
+                    } else {
+                        let res = self.stack.pop();
+                        return Ok(Some(res));
+                    }
                 }
                 OP_RETURN => {
                     let returning = self.frames.pop();
@@ -295,7 +298,11 @@ impl VM {
                     for _ in 0..returning.closure.function.arity + 1 {
                         self.stack.pop();
                     }
-                    self.stack.push(result);
+                    if self.frames.size == 0 {
+                        return Ok(Some(result));
+                    } else {
+                        self.stack.push(result);
+                    }
                 }
                 OP_APPLY => {
                     let nargs = read_short!() as usize;
@@ -347,7 +354,7 @@ impl VM {
         for i in 0..self.stack.size {
             print!("  {}", self.stack.get_ref(i));
         }
-        println!();
+        println!("\nCALL STACK: {}", self.frames.size);
     }
     #[cfg(debug_trace_execution)]
     fn trace_instruction(&self, frame: &CallFrame) {

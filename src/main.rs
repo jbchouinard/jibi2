@@ -50,6 +50,7 @@ pub struct Interpreter {
     history_file: PathBuf,
 }
 
+#[allow(clippy::new_without_default)]
 impl Interpreter {
     pub fn new() -> Self {
         Self {
@@ -76,7 +77,8 @@ impl Interpreter {
                         }
                     }
                     match self.vm.run() {
-                        Ok(()) => println!("{}", self.vm.register0.take().unwrap()),
+                        Ok(Some(res)) => println!("{}", res),
+                        Ok(None) => println!("; unspecified"),
                         Err(e) => {
                             self.vm.reset();
                             eprintln!("{}", e);
@@ -114,7 +116,7 @@ impl Interpreter {
             }
         }
         match self.vm.run() {
-            Ok(()) => (),
+            Ok(_) => (),
             Err(e) => {
                 e.print_trace();
                 eprintln!("Runtime error: {}", e);

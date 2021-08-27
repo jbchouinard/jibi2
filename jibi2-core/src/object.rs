@@ -70,10 +70,10 @@ impl Object {
     }
 }
 
-static FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(1);
+static FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn function_id() -> usize {
-    FUNCTION_COUNTER.fetch_add(0, Ordering::SeqCst)
+    FUNCTION_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,7 +127,7 @@ pub type NativeFn = Rc<dyn Fn(usize, &mut Stack) -> Result<()>>;
 static NATIVE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 fn native_function_id() -> usize {
-    NATIVE_FUNCTION_COUNTER.fetch_add(0, Ordering::SeqCst)
+    NATIVE_FUNCTION_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
 #[derive(Clone)]

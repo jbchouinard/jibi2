@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::error::{ArgumentError, Result};
+use crate::error::{ArgumentError, Result, RuntimeError};
 use crate::object::{FloatType, IntType, Object, TypeError};
 use crate::{binary_op, vararg_op};
 
@@ -76,7 +76,7 @@ pub enum Number {
 fn int_to_float(n: &IntType) -> Result<FloatType> {
     let x = *n as FloatType;
     if x as IntType != *n {
-        return Err(TypeError::new(format!("cannot convert int {} to float", n)).into());
+        return Err(RuntimeError::new(format!("cannot convert int {} to float", n)).into());
     }
     Ok(x)
 }
@@ -112,7 +112,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_add(*m)
-                .ok_or_else(|| TypeError::new("int overflow".to_string()))?;
+                .ok_or_else(|| RuntimeError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? + other.as_float()?))
@@ -123,7 +123,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_sub(*m)
-                .ok_or_else(|| ArgumentError::new("int overflow".to_string()))?;
+                .ok_or_else(|| RuntimeError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? - other.as_float()?))
@@ -134,7 +134,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_mul(*m)
-                .ok_or_else(|| ArgumentError::new("int overflow".to_string()))?;
+                .ok_or_else(|| RuntimeError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? * other.as_float()?))
@@ -145,7 +145,7 @@ impl Number {
         if let (Self::Int(n), Self::Int(m)) = (self, other) {
             let s = n
                 .checked_div(*m)
-                .ok_or_else(|| ArgumentError::new("int overflow".to_string()))?;
+                .ok_or_else(|| RuntimeError::new("int overflow".to_string()))?;
             Ok(Self::Int(s))
         } else {
             Ok(Self::Float(self.as_float()? / other.as_float()?))
