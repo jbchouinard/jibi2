@@ -350,7 +350,7 @@ impl VM {
                             self.stack.pop();
                             self.stack.push(result);
                         }
-                        _ => return Err(TypeError::new("expected callable".to_string()).into()),
+                        _ => return Err(TypeError::new("callable".to_string()).into()),
                     }
                 }
                 opcode => panic!("invalid opcode {}", opcode),

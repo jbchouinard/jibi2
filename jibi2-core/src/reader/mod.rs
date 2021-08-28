@@ -1,5 +1,6 @@
 use std::fmt;
 
+pub mod parser;
 pub mod tokenizer;
 
 pub use tokenizer::{

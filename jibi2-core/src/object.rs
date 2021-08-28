@@ -20,9 +20,26 @@ pub enum Object {
     String(Rc<String>),
     Int(IntType),
     Float(FloatType),
+    Pair(PairRef),
     Function(FunctionRef),
     Closure(ClosureRef),
     NativeFunction(NativeFunctionRef),
+}
+
+fn display_pair(pair: &Pair) -> String {
+    match pair.iter() {
+        Ok(iterator) => {
+            format!(
+                "({})",
+                iterator
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            )
+        }
+        // Not a list
+        Err(_) => format!("({} . {})", &pair.car(), &pair.cdr()),
+    }
 }
 
 impl fmt::Display for Object {
@@ -34,6 +51,7 @@ impl fmt::Display for Object {
             Self::Nil => write!(f, "nil"),
             Self::Symbol(s) => write!(f, "{}", s),
             Self::String(s) => write!(f, "\"{}\"", s),
+            Self::Pair(pair) => write!(f, "{}", display_pair(pair)),
             Self::Function(func) => write!(f, "{}", func.borrow()),
             Self::Closure(clos) => write!(f, "{}", clos.borrow().function),
             Self::NativeFunction(func) => write!(f, "{}", func),
@@ -73,6 +91,81 @@ impl Object {
         match self {
             Object::Closure(ref clos) => Ok(Rc::clone(clos)),
             _ => Err(TypeError::new("closure".to_string()).into()),
+        }
+    }
+    pub fn as_pair(&self) -> Result<PairRef> {
+        match self {
+            Object::Pair(ref pair) => Ok(Rc::clone(pair)),
+            _ => Err(TypeError::new("pair".to_string()).into()),
+        }
+    }
+    pub fn make_list(mut v: Vec<Object>) -> Object {
+        let mut cur = Object::Nil;
+        v.reverse();
+        for val in v {
+            cur = Object::Pair(Pair::cons(val, cur).into_ref());
+        }
+        cur
+    }
+    pub fn iter_list(&self) -> Result<ListIterator> {
+        match self {
+            Object::Nil => Ok(ListIterator { head: None }),
+            Object::Pair(p) => p.iter(),
+            _ => Err(TypeError::new("can only iter lists".to_string()).into()),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Pair(Object, Object);
+
+pub type PairRef = Rc<Pair>;
+
+impl Pair {
+    pub fn into_ref(self) -> PairRef {
+        Rc::new(self)
+    }
+    pub fn cons(x: Object, y: Object) -> Self {
+        Self(x, y)
+    }
+    pub fn car(&self) -> Object {
+        self.0.clone()
+    }
+    pub fn cdr(&self) -> Object {
+        self.1.clone()
+    }
+    // Will blow the stack on circular list...
+    pub fn is_list(&self) -> bool {
+        match &self.1 {
+            Object::Nil => true,
+            Object::Pair(c) => c.is_list(),
+            _ => false,
+        }
+    }
+    pub fn iter(&self) -> Result<ListIterator> {
+        if !self.is_list() {
+            return Err(TypeError::new("can only iter lists".to_string()).into());
+        }
+        Ok(ListIterator { head: Some(self) })
+    }
+}
+
+pub struct ListIterator<'a> {
+    head: Option<&'a Pair>,
+}
+
+impl Iterator for ListIterator<'_> {
+    type Item = Object;
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        match self.head {
+            None => None,
+            Some(Pair(x, y)) => {
+                match y {
+                    Object::Pair(c) => self.head = Some(c),
+                    _ => self.head = None,
+                };
+                Some(x.clone())
+            }
         }
     }
 }

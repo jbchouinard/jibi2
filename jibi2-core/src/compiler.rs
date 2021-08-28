@@ -4,19 +4,15 @@ use std::rc::Rc;
 
 use crate::error::{Error, Result};
 use crate::instruction::*;
-use crate::object::{Closure, Function, FunctionRef, Object};
-use crate::reader::{PositionTag, Token, TokenProducer, TokenValue, Tokenizer};
+use crate::object::*;
+use crate::reader::parser::{Parser, SyntaxError};
+use crate::reader::{PositionTag, TokenProducer, Tokenizer};
 use crate::vm::{CallFrame, VM};
 
-const TOK_LPAR: TokenValue = TokenValue::Char('(');
-const TOK_RPAR: TokenValue = TokenValue::Char(')');
-
 pub fn compile_tokens(name: &str, producer: Box<dyn TokenProducer>) -> Result<FunctionRef> {
-    let compiler = Compiler::new(Rc::new(name.to_string())).boxed();
-    let mut parser = Parser::new(compiler, producer);
-    parser.advance()?;
-    parser.parse()?;
-    Ok(parser.end())
+    let mut parser = Parser::new(producer);
+    let mut compiler = SexprCompiler::new(Rc::new(name.to_string()));
+    compiler.compile_all(parser.parse_all()?)
 }
 
 pub fn compile_source(filename: &str, source: &str) -> Result<FunctionRef> {
@@ -55,18 +51,17 @@ pub enum Variable {
     Upvalue(usize),
 }
 
-pub struct Compiler {
+pub struct FunctionCompiler {
     function: FunctionRef,
     scope_depth: i32,
     locals: Vec<Local>,
     upvalues: Vec<Upvalue>,
     lists: Vec<usize>,
     pos: PositionTag,
-    discard: bool,
-    enclosing: Option<Box<Compiler>>,
+    enclosing: Option<Box<FunctionCompiler>>,
 }
 
-impl Compiler {
+impl FunctionCompiler {
     pub fn new(name: Rc<String>) -> Self {
         let function = Function::new(name);
         Self {
@@ -76,23 +71,19 @@ impl Compiler {
             upvalues: vec![],
             lists: vec![],
             pos: PositionTag::new("", 0, 0),
-            discard: false,
             enclosing: None,
         }
     }
     pub fn boxed(self) -> Box<Self> {
         Box::new(self)
     }
-    pub fn encloses(&mut self, compiler: Box<Compiler>) {
+    pub fn encloses(&mut self, compiler: Box<FunctionCompiler>) {
         self.enclosing = Some(compiler);
     }
     fn offset(&self) -> usize {
         self.function.borrow().code.count()
     }
     fn emit_instruction<I: Into<AnyInstruction>>(&mut self, ins: I) {
-        if self.discard {
-            return;
-        }
         self.function
             .borrow_mut()
             .code
@@ -102,27 +93,18 @@ impl Compiler {
         self.function.borrow_mut().code.add_constant(val)
     }
     fn emit_constant(&mut self, val: Object) {
-        if self.discard {
-            return;
-        }
         self.function
             .borrow_mut()
             .code
             .write_constant(val, self.pos.lineno);
     }
     fn emit_jump(&mut self, op: Op) -> usize {
-        if self.discard {
-            return 0;
-        }
         self.function
             .borrow_mut()
             .code
             .write_instruction(Instruction::new(op, [0xff, 0xff]), self.pos.lineno)
     }
     fn patch_jump(&mut self, jmp: usize) {
-        if self.discard {
-            return;
-        }
         let loc = self.offset() - jmp - 3;
         if loc > u16::MAX as usize {
             panic!("jump offset too large");
@@ -132,9 +114,6 @@ impl Compiler {
         self.function.borrow_mut().code.write_at(jmp + 2, b2);
     }
     fn define_variable(&mut self, name: String) -> Result<()> {
-        if self.discard {
-            return Ok(());
-        }
         // Global variable: store in globals
         if self.scope_depth == 0 {
             self.emit_constant(Object::Symbol(Rc::new(name)));
@@ -205,9 +184,6 @@ impl Compiler {
         }
     }
     fn get_variable(&mut self, name: String) -> Result<()> {
-        if self.discard {
-            return Ok(());
-        }
         let var = self.resolve_variable(&name);
         match var {
             Variable::Global => {
@@ -226,9 +202,6 @@ impl Compiler {
         Ok(())
     }
     fn set_variable(&mut self, name: String) -> Result<()> {
-        if self.discard {
-            return Ok(());
-        }
         let var = self.resolve_variable(&name);
         match var {
             Variable::Global => {
@@ -247,15 +220,9 @@ impl Compiler {
         Ok(())
     }
     fn begin_scope(&mut self) {
-        if self.discard {
-            return;
-        }
         self.scope_depth += 1;
     }
     fn end_scope(&mut self) {
-        if self.discard {
-            return;
-        }
         self.scope_depth -= 1;
         let mut popped: u8 = 0;
         while !self.locals.is_empty() && self.locals[self.locals.len() - 1].depth > self.scope_depth
@@ -272,31 +239,19 @@ impl Compiler {
         }
     }
     fn begin_list(&mut self) {
-        if self.discard {
-            return;
-        }
         self.lists.push(self.offset());
     }
     fn end_list(&mut self) {
-        if self.discard {
-            return;
-        }
         let start = self.lists.pop().unwrap();
         // Pre-evaluate static expressions; if there is an expression containing only
         // constants, for example (+ 15 15), we can evaluate it at compile time
         // and just write the result in the compiled chunk
         if self.is_static_expr(start) {
-            let res = self.pre_evaluate(start);
+            let res = self.evaluate(start);
             self.emit_constant(res);
         }
     }
-    fn start_discard(&mut self) {
-        self.discard = true;
-    }
-    fn end_discard(&mut self) {
-        self.discard = false;
-    }
-    fn pre_evaluate(&mut self, start: usize) -> Object {
+    fn evaluate(&mut self, start: usize) -> Object {
         self.emit_instruction(instruction_halt());
 
         #[cfg(debug_trace_compile)]
@@ -319,9 +274,6 @@ impl Compiler {
         res
     }
     fn is_static_expr(&self, start: usize) -> bool {
-        if self.discard {
-            return false;
-        }
         let mut pos = start;
         while pos < self.offset() {
             let (ins, newpos) = AnyInstruction::read(&self.function.borrow().code.code, pos);
@@ -332,7 +284,7 @@ impl Compiler {
         }
         true
     }
-    pub fn end(&mut self) -> (Option<Box<Compiler>>, FunctionRef) {
+    pub fn end(&mut self) -> (Option<Box<FunctionCompiler>>, FunctionRef) {
         self.emit_instruction(instruction_return());
 
         #[cfg(debug_trace_compile)]
@@ -350,248 +302,304 @@ impl Compiler {
     }
 }
 
-pub struct Parser {
-    producer: Box<dyn TokenProducer>,
-    peek: Token,
-    stashed_next: Option<Token>,
-    compiler: Box<Compiler>,
+pub struct SexprCompiler {
+    compiler: Box<FunctionCompiler>,
+    pos: PositionTag,
 }
 
-impl Parser {
-    pub fn new(compiler: Box<Compiler>, producer: Box<dyn TokenProducer>) -> Self {
+impl SexprCompiler {
+    pub fn new(name: Rc<String>) -> Self {
         Self {
-            producer,
-            peek: Token::new(TokenValue::None, PositionTag::new("", 1, 0)),
-            stashed_next: None,
-            compiler,
+            compiler: FunctionCompiler::new(name).boxed(),
+            pos: PositionTag::new("", 0, 0),
         }
     }
-    fn advance(&mut self) -> Result<Token> {
-        let stashed_next = std::mem::take(&mut self.stashed_next);
-        let next = match stashed_next {
-            Some(next) => std::mem::replace(&mut self.peek, next),
-            None => std::mem::replace(&mut self.peek, self.producer.next_token()?),
-        };
-        if next.value == TokenValue::Eof {
-            return Err(self.error_at(&next, "reached EOF".to_string()));
-        }
-        self.compiler.pos = self.peek.pos.clone();
-        Ok(next)
+    pub fn compile(&mut self, sexpr: Object, pos: PositionTag) -> Result<FunctionRef> {
+        self.compiler.pos = pos.clone();
+        self.pos = pos;
+        self.top_level_sexpr(&sexpr)?;
+        let (_, func) = self.compiler.end();
+        Ok(func)
     }
-    fn rewind(&mut self, tok: Token) {
-        if self.stashed_next.is_some() {
-            panic!("cannot rewind more than once");
-        }
-        self.stashed_next = Some(std::mem::replace(&mut self.peek, tok));
-    }
-    fn expect(&mut self, v: TokenValue) -> Result<Token> {
-        if self.peek.value == v {
-            self.advance()
-        } else {
-            Err(self.error(format!("expected {}, got {}", v, self.peek.value)))
-        }
-    }
-    pub fn parse(&mut self) -> Result<()> {
+    pub fn compile_all(&mut self, forms: Vec<(PositionTag, Object)>) -> Result<FunctionRef> {
         // Empty program, return nil
-        if self.peek.value == TokenValue::Eof {
+        if forms.is_empty() {
             self.compiler.emit_constant(Object::Nil);
-            return Ok(());
-        }
-        while self.peek.value != TokenValue::Eof {
-            self.top_level_expression()?;
-            if self.peek.value != TokenValue::Eof {
-                self.compiler.emit_instruction(instruction_pop());
+        } else {
+            let last_i = forms.len() - 1;
+            for (i, (pos, sexpr)) in forms.into_iter().enumerate() {
+                self.compiler.pos = pos.clone();
+                self.pos = pos;
+                self.top_level_sexpr(&sexpr)?;
+                if i != last_i {
+                    self.compiler.emit_instruction(instruction_pop());
+                }
             }
         }
-        Ok(())
+        let (_, func) = self.compiler.end();
+        Ok(func)
     }
-    pub fn top_level_expression(&mut self) -> Result<()> {
-        if !self.definition()? {
-            self.expression()?;
+    fn top_level_sexpr(&mut self, sexpr: &Object) -> Result<()> {
+        if !self.sform_def(sexpr)? {
+            self.sexpr(sexpr)?;
         }
         Ok(())
     }
-    pub fn definition(&mut self) -> Result<bool> {
-        let next = self.advance()?;
-        if next.value == TOK_LPAR && self.peek.value == TokenValue::Keyword("def".to_string()) {
-            self.advance()?;
-            self.sform_def()?;
-            self.expect(TOK_RPAR)?;
-            return Ok(true);
-        }
-        self.rewind(next);
-        Ok(false)
-    }
-    pub fn expression(&mut self) -> Result<()> {
-        match self.peek.value {
-            TokenValue::Char('(') => self.list(),
-            _ => self.atom(),
+    fn sform_def(&mut self, sexpr: &Object) -> Result<bool> {
+        match sexpr {
+            Object::Pair(p) => match p.car().as_symbol().ok() {
+                Some("def") => {
+                    self.def(p.cdr().as_pair()?)?;
+                    self.compiler.emit_constant(Object::Nil);
+                    Ok(true)
+                }
+                _ => Ok(false),
+            },
+            _ => Ok(false),
         }
     }
-    fn atom(&mut self) -> Result<()> {
-        let current = self.advance()?;
-        match current.value {
-            TokenValue::Int(n) => self.compiler.emit_constant(Object::Int(n)),
-            TokenValue::Float(x) => self.compiler.emit_constant(Object::Float(x)),
-            TokenValue::String(s) => self.compiler.emit_constant(Object::String(Rc::new(s))),
-            TokenValue::Ident(s) => self.compiler.get_variable(s)?,
-            TokenValue::Keyword(k) => self.atom_const(k)?,
-            _ => return Err(self.error_at(&current, format!("unexpected {}", current.value))),
-        };
+    fn def(&mut self, pair: PairRef) -> Result<()> {
+        let [sym, val] = self.n_elements("def", pair)?;
+        self.sexpr(&val)?;
+        self.compiler
+            .define_variable(sym.as_symbol()?.to_string())?;
         Ok(())
     }
-    pub fn atom_const(&mut self, sym: String) -> Result<()> {
+    fn sexpr(&mut self, sexpr: &Object) -> Result<()> {
+        match sexpr {
+            Object::Pair(p) => self.list(Rc::clone(p)),
+            _ => self.atom(sexpr),
+        }
+    }
+    fn atom(&mut self, sexpr: &Object) -> Result<()> {
+        match sexpr {
+            Object::Symbol(s) => self.atom_symbol(s.to_string()),
+            _ => {
+                self.compiler.emit_constant(sexpr.clone());
+                Ok(())
+            }
+        }
+    }
+    fn atom_symbol(&mut self, sym: String) -> Result<()> {
         match &sym[..] {
             "nil" => self.compiler.emit_constant(Object::Nil),
             "true" => self.compiler.emit_constant(Object::Bool(true)),
             "false" => self.compiler.emit_constant(Object::Bool(false)),
-            _ => return Err(self.error(format!("ill-formed special form {}", sym))),
+            _ => self.compiler.get_variable(sym)?,
         }
         Ok(())
     }
-    fn list(&mut self) -> Result<()> {
+    fn list(&mut self, pair: PairRef) -> Result<()> {
         self.compiler.begin_list();
-        self.expect(TOK_LPAR)?;
-        match &self.peek.value {
-            TokenValue::Keyword(_) => self.special_form()?,
-            TokenValue::Char(')') => self.compiler.emit_constant(Object::Nil),
-            _ => self.list_apply()?,
-        };
-        self.expect(TOK_RPAR)?;
-        self.compiler.end_list();
-        Ok(())
-    }
-    fn list_apply(&mut self) -> Result<()> {
-        self.expression()?;
+        if self.special_form(Rc::clone(&pair))? {
+            self.compiler.end_list();
+            return Ok(());
+        }
+        let items: Vec<Object> = pair.iter()?.collect();
+        self.sexpr(&items[0])?;
         let mut n: u8 = 0;
-        while self.peek.value != TOK_RPAR {
-            self.expression()?;
+        for arg in &items[1..] {
+            self.sexpr(arg)?;
             n += 1;
         }
         self.compiler.emit_instruction(instruction_apply(n));
+        self.compiler.end_list();
         Ok(())
     }
-    fn ident(&mut self) -> Result<String> {
-        let current = self.advance()?;
-        let ident = match current.value {
-            TokenValue::Ident(s) => s,
-            _ => {
-                return Err(
-                    self.error_at(&current, format!("expected ident, got {}", current.value))
-                )
+    fn special_form(&mut self, pair: PairRef) -> Result<bool> {
+        let rest = pair.cdr();
+        match pair.car().as_symbol().ok() {
+            Some("def") => {
+                return Err(self.error("def not at top level or top of scope".to_string()))
             }
+            Some("set!") => self.sform_set(rest.as_pair()?)?,
+            Some("begin") => self.sform_begin(&rest)?,
+            Some("let") => self.sform_let(&rest)?,
+            Some("if") => self.sform_if(&rest)?,
+            Some("cond") => self.sform_cond(&rest)?,
+            Some("fn") => self.sform_fn(&rest)?,
+            Some("equal?") => {
+                self.sform_simple::<_, 2>(rest.as_pair()?, "equal?", instruction_equal)?
+            }
+            Some("print") => {
+                self.sform_simple::<_, 1>(rest.as_pair()?, "print", instruction_print)?
+            }
+            Some("repr") => self.sform_simple::<_, 1>(rest.as_pair()?, "repr", instruction_repr)?,
+            Some("=") => self.sform_simple::<_, 2>(rest.as_pair()?, "=", instruction_num_eq)?,
+            Some("!=") => self.sform_simple::<_, 2>(rest.as_pair()?, "!=", instruction_num_neq)?,
+            Some("<") => self.sform_simple::<_, 2>(rest.as_pair()?, "<", instruction_num_lt)?,
+            Some("<=") => self.sform_simple::<_, 2>(rest.as_pair()?, "<=", instruction_num_lte)?,
+            Some(">") => self.sform_simple::<_, 2>(rest.as_pair()?, ">", instruction_num_gt)?,
+            Some(">=") => self.sform_simple::<_, 2>(rest.as_pair()?, ">=", instruction_num_gte)?,
+            Some("+") => self.sform_var(rest.as_pair()?, instruction_add)?,
+            Some("-") => self.sform_var(rest.as_pair()?, instruction_sub)?,
+            Some("*") => self.sform_var(rest.as_pair()?, instruction_mul)?,
+            Some("/") => self.sform_var(rest.as_pair()?, instruction_div)?,
+            _ => return Ok(false),
         };
-        Ok(ident)
+        Ok(true)
     }
-    fn special_form(&mut self) -> Result<()> {
-        let current = self.advance()?;
-        let keyword = match current.value {
-            TokenValue::Keyword(k) => k,
-            _ => panic!("expected keyword"),
-        };
-        match &keyword[..] {
-            "def" => return Err(self.error("def not at top level or top of scope".to_string())),
-            "set!" => self.sform_set()?,
-            "fn" => self.sform_fn()?,
-            "let" => self.sform_let()?,
-            "begin" => self.sform_begin()?,
-            "if" => self.sform_if()?,
-            "cond" => self.sform_cond()?,
-            "equal?" => self.sform_equal()?,
-            "print" => self.sform_print()?,
-            "repr" => self.sform_repr()?,
-            "+" => self.sform_arith(keyword)?,
-            "-" => self.sform_arith(keyword)?,
-            "*" => self.sform_arith(keyword)?,
-            "/" => self.sform_arith(keyword)?,
-            "=" => self.sform_numcmp(keyword)?,
-            "!=" => self.sform_numcmp(keyword)?,
-            "<" => self.sform_numcmp(keyword)?,
-            "<=" => self.sform_numcmp(keyword)?,
-            ">" => self.sform_numcmp(keyword)?,
-            ">=" => self.sform_numcmp(keyword)?,
-            _ => return Err(self.error(format!("invalid special form keyword {}", keyword))),
+    fn sform_set(&mut self, pair: PairRef) -> Result<()> {
+        let [sym, val] = self.n_elements("set!", pair)?;
+        self.sexpr(&val)?;
+        self.compiler.set_variable(sym.as_symbol()?.to_string())?;
+        self.compiler.emit_constant(Object::Nil);
+        Ok(())
+    }
+    fn sform_simple<F: Fn() -> Instruction<0>, const N: usize>(
+        &mut self,
+        pair: PairRef,
+        name: &str,
+        insf: F,
+    ) -> Result<()> {
+        let args: [Object; N] = self.n_elements(name, pair)?;
+        for arg in &args {
+            self.sexpr(arg)?;
+        }
+        self.compiler.emit_instruction(insf());
+        Ok(())
+    }
+    fn sform_var<F: Fn(usize) -> AnyInstruction>(&mut self, pair: PairRef, insf: F) -> Result<()> {
+        let args: Vec<Object> = pair.iter()?.collect();
+        for arg in &args {
+            self.sexpr(arg)?;
+        }
+        self.compiler.emit_instruction(insf(args.len()));
+        Ok(())
+    }
+    fn sform_begin(&mut self, list: &Object) -> Result<()> {
+        self.block(list)
+    }
+    fn sform_let(&mut self, list: &Object) -> Result<()> {
+        self.begin_scope();
+        let list = list.as_pair()?;
+        let defs: Vec<Object> = list.car().iter_list()?.collect();
+        for def in &defs {
+            self.def(def.as_pair()?)?;
+        }
+        let exprs = list.cdr();
+        self.block(&exprs)?;
+        self.end_scope(defs.len());
+        Ok(())
+    }
+    fn sform_if(&mut self, list: &Object) -> Result<()> {
+        let start = self.compiler.offset();
+        let [pred, then_expr, else_expr] = self.n_elements("if", list.as_pair()?)?;
+        self.sexpr(&pred)?;
+        // If the predicate is a static expression, don't bother with jumps, just
+        // compile the correct branch
+        if self.compiler.is_static_expr(start) {
+            let pred = self.compiler.evaluate(start).as_bool()?;
+            self.sexpr(&if pred { then_expr } else { else_expr })?;
+        } else {
+            let to_else = self.compiler.emit_jump(Op::JumpFalse);
+            self.compiler.emit_instruction(instruction_pop());
+            self.sexpr(&then_expr)?;
+            let to_end = self.compiler.emit_jump(Op::Jump);
+            self.compiler.patch_jump(to_else);
+            self.compiler.emit_instruction(instruction_pop());
+            self.sexpr(&else_expr)?;
+            self.compiler.patch_jump(to_end);
         }
         Ok(())
     }
-    fn sform_def(&mut self) -> Result<()> {
-        let ident = self.ident()?;
-        self.expression()?;
-        self.compiler.define_variable(ident)?;
-        self.compiler.emit_constant(Object::Nil);
+    fn sform_cond(&mut self, list: &Object) -> Result<()> {
+        let conds: Vec<Object> = list.iter_list()?.collect();
+
+        let mut jumps_to_end: Vec<usize> = vec![];
+        let mut has_else_clause = false;
+        for cond in &conds {
+            let cond = cond.as_pair()?;
+            let pred = cond.car();
+            let body = cond.cdr();
+            let start = self.compiler.offset();
+            self.sexpr(&pred)?;
+            if self.compiler.is_static_expr(start) {
+                if self.compiler.evaluate(start).as_bool()? {
+                    self.block(&body)?;
+                }
+                has_else_clause = true;
+                break;
+            } else {
+                let jump_skip = self.compiler.emit_jump(Op::JumpFalse);
+                self.compiler.emit_instruction(instruction_pop());
+                self.block(&body)?;
+                jumps_to_end.push(self.compiler.emit_jump(Op::Jump));
+                self.compiler.patch_jump(jump_skip);
+                self.compiler.emit_instruction(instruction_pop());
+            }
+        }
+        // In case no condition is fulfilled
+        if !has_else_clause {
+            self.compiler.emit_constant(Object::Nil);
+        }
+        for jump in jumps_to_end {
+            self.compiler.patch_jump(jump);
+        }
         Ok(())
     }
-    fn sform_set(&mut self) -> Result<()> {
-        let ident = self.ident()?;
-        self.expression()?;
-        self.compiler.set_variable(ident)?;
-        self.compiler.emit_constant(Object::Nil);
-        Ok(())
-    }
-    fn sform_fn(&mut self) -> Result<()> {
+    fn sform_fn(&mut self, list: &Object) -> Result<()> {
+        let list = list.as_pair()?;
+        let formals: Vec<String> = list
+            .car()
+            .iter_list()?
+            .map(|obj| obj.as_symbol().map(|s| s.to_string()))
+            .collect::<Result<Vec<String>>>()?;
+        let body = list.cdr();
+
         let prev_compiler = std::mem::replace(
             &mut self.compiler,
-            Compiler::new(Rc::new("unnamed".to_string())).boxed(),
+            FunctionCompiler::new(Rc::new("unnamed".to_string())).boxed(),
         );
         self.compiler.encloses(prev_compiler);
-
         self.compiler.begin_scope();
-        self.expect(TOK_LPAR)?;
-        while self.peek.value != TOK_RPAR {
-            let ident = self.ident()?;
-            self.compiler.function.borrow_mut().arity += 1;
-            self.compiler.define_variable(ident)?;
+        self.compiler.function.borrow_mut().arity = formals.len();
+        for name in formals {
+            self.compiler.define_variable(name)?;
         }
-        self.expect(TOK_RPAR)?;
-        self.block()?;
+        self.block(&body)?;
         let (prev_compiler, func) = self.compiler.end();
         self.compiler = prev_compiler.unwrap();
-
         let n = self.compiler.add_constant(Object::Function(func));
         self.compiler.emit_instruction(instruction_closure(n));
         Ok(())
     }
-    fn sform_let(&mut self) -> Result<()> {
-        self.compiler.begin_scope();
-        self.expect(TOK_LPAR)?;
-        while self.peek.value != TOK_RPAR {
-            self.expect(TOK_LPAR)?;
-            let ident = self.ident()?;
-            self.expression()?;
-            self.compiler.define_variable(ident)?;
-            self.expect(TOK_RPAR)?;
-        }
-        self.expect(TOK_RPAR)?;
-        while self.peek.value != TOK_RPAR {
-            self.expression()?;
-            self.compiler.emit_instruction(instruction_pop_r0());
-        }
-        self.compiler.end_scope();
-        self.compiler.emit_instruction(instruction_push_r0());
-        Ok(())
-    }
-    fn block(&mut self) -> Result<()> {
+    fn block(&mut self, list: &Object) -> Result<()> {
         // An empty block evaluates to nil
-        if self.peek.value == TOK_RPAR {
-            self.compiler.emit_constant(Object::Nil);
-            return Ok(());
-        }
+        let elements: Vec<Object> = list.iter_list()?.collect();
+        let n_elems = elements.len();
+        let mut n_defs = 0;
+        let mut n_exprs = 0;
+        self.begin_scope();
         // A block (begin, let, fn) evaluates to the result of the last expression.
         // So we pop the result of all the expressions except the last.
-        let mut any_locals = false;
+        for (i, element) in elements.iter().enumerate() {
+            if self.sform_def(element)? {
+                n_defs += 1;
+                if i < n_elems - 1 {
+                    self.compiler.emit_instruction(instruction_pop());
+                }
+            } else {
+                break;
+            }
+        }
+        for (i, element) in elements.iter().enumerate().skip(n_defs) {
+            self.sexpr(element)?;
+            n_exprs += 1;
+            if i < n_elems - 1 {
+                self.compiler.emit_instruction(instruction_pop());
+            }
+        }
+        if n_exprs == 0 {
+            self.compiler.emit_constant(Object::Nil);
+        }
+        self.end_scope(n_defs);
+        Ok(())
+    }
+    fn begin_scope(&mut self) {
         self.compiler.begin_scope();
-        while self.definition()? {
-            any_locals = true;
-            if self.peek.value != TOK_RPAR {
-                self.compiler.emit_instruction(instruction_pop());
-            }
-        }
-        while self.peek.value != TOK_RPAR {
-            self.expression()?;
-            if self.peek.value != TOK_RPAR {
-                self.compiler.emit_instruction(instruction_pop());
-            }
-        }
+    }
+    fn end_scope(&mut self, n_defs: usize) {
         // If there are were local variable definitions, the top of stack will look like:
         //   <result>
         //   <local>
@@ -599,7 +607,7 @@ impl Parser {
         //   <local>
         // So we save result to R0, end the scope, which pops locals, then push back
         // the result.
-        if any_locals {
+        if n_defs > 0 {
             self.compiler.emit_instruction(instruction_pop_r0());
             self.compiler.end_scope();
             self.compiler.emit_instruction(instruction_push_r0());
@@ -608,153 +616,35 @@ impl Parser {
         } else {
             self.compiler.end_scope();
         }
-        Ok(())
     }
-    fn sform_begin(&mut self) -> Result<()> {
-        self.block()?;
-        Ok(())
-    }
-    fn sform_if(&mut self) -> Result<()> {
-        let start = self.compiler.offset();
-        self.expression()?;
-        // If the predicate is a static expression, don't bother with jumps, just
-        // compile the correct branch
-        if self.compiler.is_static_expr(start) {
-            let res = self.compiler.pre_evaluate(start).as_bool()?;
-            if res {
-                self.expression()?;
-                self.compiler.start_discard();
-                self.expression()?;
-                self.compiler.end_discard();
-            } else {
-                self.compiler.start_discard();
-                self.expression()?;
-                self.compiler.end_discard();
-                self.expression()?;
-            }
-        } else {
-            let to_else = self.compiler.emit_jump(Op::JumpFalse);
-            self.compiler.emit_instruction(instruction_pop());
-            self.expression()?;
-            let to_end = self.compiler.emit_jump(Op::Jump);
-            self.compiler.patch_jump(to_else);
-            self.compiler.emit_instruction(instruction_pop());
-            self.expression()?;
-            self.compiler.patch_jump(to_end);
-        }
-        Ok(())
-    }
-    fn sform_cond(&mut self) -> Result<()> {
-        let mut to_end: Vec<usize> = vec![];
 
-        let mut discard_rest = false;
-        while self.peek.value != TOK_RPAR {
-            self.expect(TOK_LPAR)?;
-            let start = self.compiler.offset();
-            self.expression()?;
-            if discard_rest {
-                self.expression()?;
-            } else if self.compiler.is_static_expr(start) {
-                if self.compiler.pre_evaluate(start).as_bool()? {
-                    self.expression()?;
-                    self.compiler.start_discard();
-                    discard_rest = true;
-                } else {
-                    self.compiler.start_discard();
-                    self.expression()?;
-                    self.compiler.end_discard();
-                }
-            } else {
-                let skip = self.compiler.emit_jump(Op::JumpFalse);
-                self.compiler.emit_instruction(instruction_pop());
-                self.expression()?;
-                to_end.push(self.compiler.emit_jump(Op::Jump));
-                self.compiler.patch_jump(skip);
-                self.compiler.emit_instruction(instruction_pop());
-            }
-            self.expect(TOK_RPAR)?;
-        }
-        self.compiler.end_discard();
-        // In case no condition is fulfilled
-        if !discard_rest {
-            self.compiler.emit_constant(Object::Nil);
-        }
-        for jmp in to_end {
-            self.compiler.patch_jump(jmp);
-        }
-        Ok(())
-    }
-    fn sform_equal(&mut self) -> Result<()> {
-        self.expression()?;
-        self.expression()?;
-        self.compiler.emit_instruction(instruction_equal());
-        Ok(())
-    }
-    fn sform_print(&mut self) -> Result<()> {
-        self.expression()?;
-        self.compiler.emit_instruction(instruction_print());
-        Ok(())
-    }
-    fn sform_repr(&mut self) -> Result<()> {
-        self.expression()?;
-        self.compiler.emit_instruction(instruction_repr());
-        Ok(())
-    }
-    fn sform_arith(&mut self, op: String) -> Result<()> {
-        let mut nargs: usize = 0;
-        while self.peek.value != TOK_RPAR {
-            self.expression()?;
-            nargs += 1;
-        }
-        self.compiler.emit_instruction(match &op[..] {
-            "+" => instruction_add(nargs),
-            "-" => instruction_sub(nargs),
-            "*" => instruction_mul(nargs),
-            "/" => instruction_div(nargs),
-            _ => panic!("invalid arith keyword {}", op),
-        });
-        Ok(())
-    }
-    fn sform_numcmp(&mut self, op: String) -> Result<()> {
-        self.expression()?;
-        self.expression()?;
-        self.compiler.emit_instruction(match &op[..] {
-            "=" => instruction_num_eq(),
-            "!=" => instruction_num_neq(),
-            "<" => instruction_num_lt(),
-            "<=" => instruction_num_lte(),
-            ">" => instruction_num_gt(),
-            ">=" => instruction_num_gte(),
-            _ => panic!("invalid numcmp keyword {}", op),
-        });
-        Ok(())
-    }
-    fn error_at(&self, tok: &Token, reason: String) -> Error {
-        SyntaxError::new(tok.pos.clone(), reason).into()
-    }
     fn error(&self, reason: String) -> Error {
-        self.error_at(&self.peek, reason)
+        CompileError::new(self.pos.clone(), reason).into()
     }
-    fn end(mut self) -> FunctionRef {
-        let (_, func) = self.compiler.end();
-        func
+    fn n_elements<const N: usize>(&self, name: &str, list: PairRef) -> Result<[Object; N]> {
+        let elements: Vec<Object> = list.iter()?.collect();
+        if elements.len() == N {
+            Ok(elements.try_into().unwrap())
+        } else {
+            Err(self.error(format!("special form {} expected {} argument(s)", name, N)))
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct SyntaxError {
+pub struct CompileError {
     pub pos: PositionTag,
     pub reason: String,
 }
 
-impl SyntaxError {
+impl CompileError {
     pub fn new(pos: PositionTag, reason: String) -> Self {
         Self { pos, reason }
     }
 }
 
-impl fmt::Display for SyntaxError {
+impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
-        write!(f, "SyntaxError: {} at {}", self.reason, self.pos)
+        write!(f, "CompileError: {} at {}", self.reason, self.pos)
     }
 }

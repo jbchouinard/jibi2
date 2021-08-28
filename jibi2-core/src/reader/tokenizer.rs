@@ -14,7 +14,6 @@ pub enum TokenValue {
     Char(char),
     Int(IntType),
     Float(FloatType),
-    Keyword(String),
     Ident(String),
     String(String),
     Eof,
@@ -29,7 +28,6 @@ impl fmt::Display for TokenValue {
             Int(n) => write!(f, "Int({})", n),
             Float(x) => write!(f, "Float({})", x),
             Ident(s) => write!(f, "Ident({})", s),
-            Keyword(k) => write!(f, "Keyword({})", k),
             String(s) => write!(f, "String(\"{}\")", s),
             Char(c) => write!(f, "Char('{}')", c),
         }
@@ -61,17 +59,6 @@ impl fmt::Display for Token {
 }
 
 lazy_static! {
-    static ref RE_KEYWORD: Regex = Regex::new(
-        r"(?x)
-            ^(
-            def|fn|set!|begin|let|if|cond|equal\?
-            |repr|print
-            |nil|true|false
-            |\+|-|/|\*|=|!=|>|>=|<|<=
-            )
-        "
-    )
-    .unwrap();
     static ref RE_WS: Regex = Regex::new(r"^\s+").unwrap();
     static ref RE_IDENT: Regex = Regex::new(
         r"(?x)
@@ -110,10 +97,6 @@ fn t_ident(val: &str) -> TResult {
 
 fn t_string(val: &str) -> TResult {
     Ok(TokenValue::String(val[1..val.len() - 1].to_string()))
-}
-
-fn t_keyword(val: &str) -> TResult {
-    Ok(TokenValue::Keyword(val.to_string()))
 }
 
 fn t_char(s: &str) -> TResult {
@@ -242,9 +225,6 @@ impl TokenProducer for Tokenizer {
         if let Some(token) = self.try_token(&RE_INT, t_int)? {
             return Ok(token);
         }
-        if let Some(token) = self.try_token(&RE_KEYWORD, t_keyword)? {
-            return Ok(token);
-        }
         if let Some(token) = self.try_token(&RE_IDENT, t_ident)? {
             return Ok(token);
         }
@@ -359,7 +339,7 @@ mod tests {
             "(* 12 -15)",
             vec![
                 TokenValue::Char('('),
-                TokenValue::Keyword("*".to_string()),
+                TokenValue::Ident("*".to_string()),
                 TokenValue::Int(12),
                 TokenValue::Int(-15),
                 TokenValue::Char(')'),
@@ -424,7 +404,7 @@ mod tests {
             "(* 12.0 -0.5)",
             vec![
                 TokenValue::Char('('),
-                TokenValue::Keyword("*".to_string()),
+                TokenValue::Ident("*".to_string()),
                 TokenValue::Float(12.0),
                 TokenValue::Float(-0.5),
                 TokenValue::Char(')'),
