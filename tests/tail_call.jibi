@@ -1,0 +1,10 @@
+(def sum-iter (fn (n acc)
+    (if (= n 0)
+        acc
+        (sum-iter (- n 1) (+ acc n)))))
+
+(def sum (fn (n) (sum-iter n 0)))
+
+
+(print "should not overflow the stack:")
+(print (sum 100000))

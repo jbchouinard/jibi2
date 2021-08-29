@@ -212,7 +212,7 @@ impl fmt::Display for Function {
 pub struct Closure {
     pub function: Function,
     pub enclosing: Option<ClosureRef>,
-    pub captured: Vec<Option<Object>>,
+    pub captured: Vec<Option<Rc<RefCell<Object>>>>,
 }
 
 pub type ClosureRef = Rc<RefCell<Closure>>;
@@ -230,14 +230,16 @@ impl Closure {
     }
     pub fn get_upvalue(&self, n: usize) -> Object {
         match self.function.upvalues[n] {
-            Variable::Local(i) => self.captured[i - 1].as_ref().unwrap().clone(),
+            Variable::Local(i) => self.captured[i - 1].as_ref().unwrap().borrow().clone(),
             Variable::Upvalue(i) => self.enclosing.as_ref().unwrap().borrow().get_upvalue(i),
             _ => panic!(),
         }
     }
     pub fn set_upvalue(&mut self, n: usize, val: Object) {
         match self.function.upvalues[n] {
-            Variable::Local(i) => self.captured[i - 1] = Some(val),
+            Variable::Local(i) => {
+                self.captured[i - 1].as_ref().unwrap().replace(val);
+            }
             Variable::Upvalue(i) => self
                 .enclosing
                 .as_ref()
@@ -319,6 +321,7 @@ fn printsize<T>(name: &str) {
 }
 
 pub fn debug_print_object_sizes() {
+    printsize::<Object>("Object");
     printsize::<bool>("Bool");
     printsize::<IntType>("Int");
     printsize::<FloatType>("Float");
@@ -328,7 +331,6 @@ pub fn debug_print_object_sizes() {
     printsize::<FunctionRef>("FunctionRef");
     printsize::<NativeFunction>("NativeFunction");
     printsize::<NativeFunctionRef>("NativeFunctionRef");
-    printsize::<Object>("Value");
     printsize::<Stack>("Stack");
     printsize::<CallFrame>("CallFrame");
     printsize::<CallStack>("CallStack");

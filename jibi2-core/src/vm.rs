@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -7,14 +8,15 @@ use crate::compiler::{compile_source, compile_tokens, Variable};
 use crate::error::{ArgumentError, Error, Result, RuntimeError};
 use crate::instruction::*;
 use crate::native::add_native_functions;
-use crate::object::{Closure, ClosureRef, NativeFn, NativeFunction, Object, TypeError};
+use crate::object::{Closure, ClosureRef, NativeFn, NativeFunction, Object, Pair, TypeError};
 use crate::ops::*;
 use crate::reader::TokenProducer;
 use crate::stack::ArrayStack;
 
-// 256KiB / 16 bytes per Object
-pub type Stack = ArrayStack<Object, { 256 * 1024 / 16 }>;
-pub type CallStack = ArrayStack<CallFrame, 1024>;
+// 512KiB / 16 bytes per Object
+pub type Stack = ArrayStack<Object, { 512 * 1024 / 16 }>;
+// 512KiB / 24 bytes per CallFrame
+pub type CallStack = ArrayStack<CallFrame, { 512 * 1024 / 24 }>;
 
 pub struct VM {
     pub stack: Stack,
@@ -125,65 +127,63 @@ impl VM {
                 op
             }};
         }
-        macro_rules! read_short {
-            () => {{
+        macro_rules! read_operand {
+            ($op:ident) => {{
                 let frame = mutframe!();
-                let op = frame.closure.borrow().function.code.code[frame.ip];
-                frame.ip += 1;
-                op
+                if ($op & OP::LONG) == OP::LONG {
+                    let op = (frame.closure.borrow().function.code.code[frame.ip] as u16) << 8
+                        | (frame.closure.borrow().function.code.code[frame.ip + 1] as u16);
+                    frame.ip += 2;
+                    op as usize
+                } else {
+                    let op = frame.closure.borrow().function.code.code[frame.ip];
+                    frame.ip += 1;
+                    op as usize
+                }
             }};
         }
-        macro_rules! read_long {
-            () => {{
-                let frame = mutframe!();
-                let op = (frame.closure.borrow().function.code.code[frame.ip] as u16) << 8
-                    | (frame.closure.borrow().function.code.code[frame.ip + 1] as u16);
-                frame.ip += 2;
-                op
-            }};
-        }
-        macro_rules! read_constant_short {
-            () => {{
-                let n = read_short!() as usize;
-                frame!().closure.borrow().function.code.constants[n].clone()
-            }};
-        }
-        macro_rules! read_constant_long {
-            () => {{
-                let n = read_long!() as usize;
+        macro_rules! read_constant {
+            ($op:ident) => {{
+                let n = read_operand!($op);
                 frame!().closure.borrow().function.code.constants[n].clone()
             }};
         }
 
         loop {
+            if self.frames.size == 0 {
+                return Ok(Some(self.stack.pop()));
+            }
+
             #[cfg(debug_trace_execution)]
             {
                 self.trace_state();
                 self.trace_instruction(frame!());
             }
 
-            match read_op!() {
-                OP_JUMP => {
-                    let jmp = read_long!() as usize;
+            let op = read_op!();
+            match op {
+                OP::NOP => (),
+                OP::JUMP => {
+                    let jmp = read_operand!(op) as usize;
                     mutframe!().ip += jmp;
                 }
-                OP_JUMP_TRUE => {
-                    let jmp = read_long!() as usize;
+                OP::JUMP_TRUE => {
+                    let jmp = read_operand!(op) as usize;
                     if self.peek(0).as_bool()? {
                         mutframe!().ip += jmp;
                     }
                 }
-                OP_JUMP_FALSE => {
-                    let jmp = read_long!() as usize;
+                OP::JUMP_FALSE => {
+                    let jmp = read_operand!(op) as usize;
                     if !self.peek(0).as_bool()? {
                         mutframe!().ip += jmp;
                     }
                 }
-                OP_REPR => {
+                OP::REPR => {
                     let val = self.stack.pop();
                     self.stack.push(Object::String(Rc::new(val.to_string())));
                 }
-                OP_PRINT => {
+                OP::PRINT => {
                     let val = self.stack.pop();
                     let s = match val {
                         Object::String(s) => s.to_string(),
@@ -192,39 +192,35 @@ impl VM {
                     println!("{}", s);
                     self.stack.push(Object::Nil);
                 }
-                OP_ADD => op_add(&mut self.stack, read_short!() as usize)?,
-                OP_ADD_LONG => op_add(&mut self.stack, read_long!() as usize)?,
-                OP_SUB => op_sub(&mut self.stack, read_short!() as usize)?,
-                OP_SUB_LONG => op_sub(&mut self.stack, read_long!() as usize)?,
-                OP_MUL => op_mul(&mut self.stack, read_short!() as usize)?,
-                OP_MUL_LONG => op_mul(&mut self.stack, read_short!() as usize)?,
-                OP_DIV => op_div(&mut self.stack, read_short!() as usize)?,
-                OP_DIV_LONG => op_div(&mut self.stack, read_long!() as usize)?,
-                OP_NUM_EQ => op_num_eq(&mut self.stack)?,
-                OP_NUM_NEQ => op_num_neq(&mut self.stack)?,
-                OP_NUM_LT => op_num_lt(&mut self.stack)?,
-                OP_NUM_LTE => op_num_lte(&mut self.stack)?,
-                OP_NUM_GT => op_num_gt(&mut self.stack)?,
-                OP_NUM_GTE => op_num_gte(&mut self.stack)?,
-                OP_EQUAL => op_equal(&mut self.stack)?,
-                OP_POP_R0 => {
+                OP::ADD | OP::ADD_LONG => op_add(&mut self.stack, read_operand!(op))?,
+                OP::SUB | OP::SUB_LONG => op_sub(&mut self.stack, read_operand!(op))?,
+                OP::MUL | OP::MUL_LONG => op_mul(&mut self.stack, read_operand!(op))?,
+                OP::DIV | OP::DIV_LONG => op_div(&mut self.stack, read_operand!(op))?,
+                OP::NUM_EQ => op_num_eq(&mut self.stack)?,
+                OP::NUM_NEQ => op_num_neq(&mut self.stack)?,
+                OP::NUM_LT => op_num_lt(&mut self.stack)?,
+                OP::NUM_LTE => op_num_lte(&mut self.stack)?,
+                OP::NUM_GT => op_num_gt(&mut self.stack)?,
+                OP::NUM_GTE => op_num_gte(&mut self.stack)?,
+                OP::EQUAL => op_equal(&mut self.stack)?,
+                OP::POP_R0 => {
                     self.register0 = Some(self.stack.pop());
                 }
-                OP_PUSH_R0 => self.stack.push(self.register0.take().unwrap()),
-                OP_POP => {
+                OP::PUSH_R0 => self.stack.push(self.register0.take().unwrap()),
+                OP::POP => {
                     self.stack.pop();
                 }
-                OP_POP_N => {
-                    for _ in 0..read_short!() {
+                OP::POP_N => {
+                    for _ in 0..read_operand!(op) {
                         self.stack.pop();
                     }
                 }
-                OP_DEF_GLOBAL => {
+                OP::DEF_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     let val = self.stack.pop();
                     self.globals.insert(sym, val);
                 }
-                OP_GET_GLOBAL => {
+                OP::GET_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     match self.globals.get(&sym) {
                         Some(val) => self.stack.push(val.clone()),
@@ -233,7 +229,7 @@ impl VM {
                         }
                     }
                 }
-                OP_SET_GLOBAL => {
+                OP::SET_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     let val = self.stack.pop();
                     match self.globals.get(&sym) {
@@ -245,68 +241,44 @@ impl VM {
                         }
                     }
                 }
-                OP_GET_LOCAL => self.stack.push(
-                    self.stack
-                        .get_ref(frame!().fp + read_short!() as usize)
-                        .clone(),
-                ),
-                OP_GET_LOCAL_LONG => self.stack.push(
-                    self.stack
-                        .get_ref(frame!().fp + read_long!() as usize)
-                        .clone(),
-                ),
-                OP_SET_LOCAL => {
+                OP::GET_LOCAL | OP::GET_LOCAL_LONG => self
+                    .stack
+                    .push(self.stack.get_ref(frame!().fp + read_operand!(op)).clone()),
+
+                OP::SET_LOCAL | OP::SET_LOCAL_LONG => {
                     let val = self.stack.pop();
-                    *self.stack.get_mut(frame!().fp + read_short!() as usize) = val;
+                    *self.stack.get_mut(frame!().fp + read_operand!(op)) = val;
                 }
-                OP_SET_LOCAL_LONG => {
-                    let val = self.stack.pop();
-                    *self.stack.get_mut(frame!().fp + read_short!() as usize) = val;
-                }
-                OP_GET_UPVALUE => {
-                    let n = read_short!();
+                OP::GET_UPVALUE => {
+                    let n = read_operand!(op);
                     let closure = self.stack.get_ref(frame!().fp).as_closure()?;
                     self.stack.push(closure.borrow().get_upvalue(n as usize));
                 }
-                OP_SET_UPVALUE => {
-                    let n = read_short!();
+                OP::SET_UPVALUE => {
+                    let n = read_operand!(op);
                     let val = self.stack.pop();
                     let closure = self.stack.get_ref(frame!().fp).as_closure()?;
                     closure.borrow_mut().set_upvalue(n as usize, val);
                 }
-                OP_CONSTANT => {
-                    self.stack.push(read_constant_short!());
+                OP::CONSTANT | OP::CONSTANT_LONG => {
+                    self.stack.push(read_constant!(op));
                 }
-                OP_CONSTANT_LONG => {
-                    self.stack.push(read_constant_long!());
-                }
-                OP_CLOSURE => {
-                    let func = read_constant_short!().as_function()?;
+                OP::CLOSURE | OP::CLOSURE_LONG => {
+                    let func = read_constant!(op).as_function()?;
                     let enclosing = self.stack.get_ref(frame!().fp).as_closure()?;
                     let mut closure = Closure::new(func.borrow().clone(), Some(enclosing));
                     for uv in func.borrow().upvalues.iter() {
                         closure.captured.push(match uv {
-                            Variable::Local(i) => Some(self.stack.get_ref(frame!().fp + i).clone()),
+                            Variable::Local(i) => {
+                                Some(mutframe!().get_upvalue(&mut self.stack, *i))
+                            }
                             Variable::Upvalue(_) => None,
                             _ => panic!(),
                         })
                     }
                     self.stack.push(Object::Closure(closure.into_ref()));
                 }
-                OP_CLOSURE_LONG => {
-                    let func = read_constant_long!().as_function()?;
-                    let enclosing = self.stack.get_ref(frame!().fp).as_closure()?;
-                    let mut closure = Closure::new(func.borrow().clone(), Some(enclosing));
-                    for uv in func.borrow().upvalues.iter() {
-                        closure.captured.push(match uv {
-                            Variable::Local(i) => Some(self.stack.get_ref(frame!().fp + i).clone()),
-                            Variable::Upvalue(_) => None,
-                            _ => panic!(),
-                        })
-                    }
-                    self.stack.push(Object::Closure(closure.into_ref()));
-                }
-                OP_HALT => {
+                OP::HALT => {
                     if self.stack.size == 0 {
                         return Ok(None);
                     } else {
@@ -314,23 +286,10 @@ impl VM {
                         return Ok(Some(res));
                     }
                 }
-                OP_RETURN => {
-                    let returning = self.frames.pop();
-                    let result = self.stack.pop();
-                    // Pop off arguments and function
-                    for _ in 0..returning.closure.borrow().function.arity + 1 {
-                        self.stack.pop();
-                    }
-                    if self.frames.size == 0 {
-                        return Ok(Some(result));
-                    } else {
-                        self.stack.push(result);
-                    }
-                }
-                OP_APPLY => {
-                    let nargs = read_short!() as usize;
-                    let obj = self.stack.peek_ref(nargs).clone();
-                    match obj {
+                OP::CALL => {
+                    let nargs = read_operand!(op) as usize;
+                    let func = self.stack.peek_ref(nargs).clone();
+                    match func {
                         Object::Closure(clos) => {
                             let function = &clos.borrow().function;
                             if function.arity != nargs {
@@ -352,6 +311,83 @@ impl VM {
                         }
                         _ => return Err(TypeError::new("callable".to_string()).into()),
                     }
+                }
+                OP::RETURN => {
+                    let returning = self.frames.pop();
+                    let result = self.stack.pop();
+                    // Pop off arguments and function
+                    self.stack
+                        .pop_n(returning.closure.borrow().function.arity + 1);
+                    self.stack.push(result);
+                }
+                OP::TAIL_CALL => {
+                    // Save the function being called and its arguments
+                    let nargs = read_operand!(op) as usize;
+                    let mut saved = vec![];
+                    for _ in 0..nargs + 1 {
+                        saved.push(self.stack.pop());
+                    }
+
+                    let frame = mutframe!();
+
+                    // Pop off function object and locals of current function call
+                    self.stack.pop_n(frame.closure.borrow().function.arity + 1);
+
+                    // Push back the next function and its arguments
+                    while !saved.is_empty() {
+                        self.stack.push(saved.pop().unwrap());
+                    }
+
+                    // Call next function
+                    let func = self.stack.peek_ref(nargs).clone();
+                    match func {
+                        Object::Closure(clos) => {
+                            // Modify the CallFrame at the top of the stack instead of
+                            // creating a new one.
+                            let function = &clos.borrow().function;
+                            if function.arity != nargs {
+                                return Err(ArgumentError::new(format!(
+                                    "expected {} arguments, got {}",
+                                    function.arity, nargs
+                                ))
+                                .into());
+                            }
+                            frame.fp = self.stack.size - function.arity - 1;
+                            frame.closure = Rc::clone(&clos);
+                            frame.ip = 0;
+                        }
+                        Object::NativeFunction(function) => {
+                            // Native functions don't use call frames, so pop it
+                            self.frames.pop();
+                            function.call(nargs, &mut self.stack)?;
+                            let result = self.stack.pop();
+                            // Pop off function value
+                            self.stack.pop();
+                            self.stack.push(result);
+                        }
+                        _ => return Err(TypeError::new("callable".to_string()).into()),
+                    }
+                }
+                OP::CONS => {
+                    let x = self.stack.pop();
+                    let y = self.stack.pop();
+                    self.stack.push(Object::Pair(Pair::cons(y, x).into_ref()));
+                }
+                OP::CAR => {
+                    let pair = self.stack.pop().as_pair()?;
+                    self.stack.push(pair.car());
+                }
+                OP::CDR => {
+                    let pair = self.stack.pop().as_pair()?;
+                    self.stack.push(pair.cdr());
+                }
+                OP::LIST | OP::LIST_LONG => {
+                    let n = read_operand!(op);
+                    let mut head = Object::Nil;
+                    for _ in 0..n {
+                        head = Object::Pair(Pair::cons(self.stack.pop(), head).into_ref());
+                    }
+                    self.stack.push(head);
                 }
                 opcode => panic!("invalid opcode {}", opcode),
             }
@@ -395,11 +431,27 @@ pub struct CallFrame {
     closure: ClosureRef,
     ip: usize,
     fp: usize,
+    closed_upvalues: Vec<(usize, Rc<RefCell<Object>>)>,
 }
 
 impl CallFrame {
     pub fn new(closure: ClosureRef, ip: usize, fp: usize) -> Self {
-        Self { closure, ip, fp }
+        Self {
+            closure,
+            ip,
+            fp,
+            closed_upvalues: vec![],
+        }
+    }
+    fn get_upvalue(&mut self, stack: &mut Stack, i: usize) -> Rc<RefCell<Object>> {
+        for (j, objref) in &self.closed_upvalues {
+            if i == *j {
+                return Rc::clone(objref);
+            }
+        }
+        let objref = Rc::new(RefCell::new(stack.get_ref(self.fp + i).clone()));
+        self.closed_upvalues.push((i, Rc::clone(&objref)));
+        objref
     }
 }
 

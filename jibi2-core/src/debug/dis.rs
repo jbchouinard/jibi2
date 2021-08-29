@@ -1,62 +1,67 @@
 use std::fmt;
 
 use crate::chunk::Chunk;
-use crate::instruction::{AnyInstruction, Instruction, Op};
+use crate::instruction::*;
 
-impl fmt::Display for Op {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{:16}",
-            match self {
-                Op::Halt => "OP_HALT",
-                Op::Add => "OP_ADD",
-                Op::Sub => "OP_SUB",
-                Op::Mul => "OP_MUL",
-                Op::Div => "OP_DIV",
-                Op::AddLong => "OP_ADD_LONG",
-                Op::SubLong => "OP_SUB_LONG",
-                Op::MulLong => "OP_MUL_LONG",
-                Op::DivLong => "OP_DIV_LONG",
-                Op::PopR0 => "OP_POP_R0",
-                Op::PushR0 => "OP_PUSH_R0",
-                Op::Pop => "OP_POP",
-                Op::PopN => "OP_POP_N",
-                Op::NumEq => "OP_NUM_EQ",
-                Op::NumNeq => "OP_NUM_NEQ",
-                Op::NumLt => "OP_NUM_LT",
-                Op::NumLte => "OP_NUM_LTE",
-                Op::NumGt => "OP_NUM_GT",
-                Op::NumGte => "OP_NUM_GTE",
-                Op::Equal => "OP_EQUAL",
-                Op::DefGlobal => "OP_DEF_GLOBAL",
-                Op::GetGlobal => "OP_GET_GLOBAL",
-                Op::SetGlobal => "OP_SET_GLOBAL",
-                Op::GetLocal => "OP_GET_LOCAL",
-                Op::GetLocalLong => "OP_GET_LOCAL_LONG",
-                Op::SetLocal => "OP_SET_LOCAL",
-                Op::SetLocalLong => "OP_SET_LOCAL_LONG",
-                Op::GetUpvalue => "OP_GET_UPVALUE",
-                Op::SetUpvalue => "OP_SET_UPVALUE",
-                Op::Return => "OP_RETURN",
-                Op::Constant => "OP_CONSTANT",
-                Op::ConstantLong => "OP_CONSTANT_LONG",
-                Op::Jump => "OP_JUMP",
-                Op::JumpTrue => "OP_JUMP_IF_TRUE",
-                Op::JumpFalse => "OP_JUMP_IF_FALSE",
-                Op::Apply => "OP_APPLY",
-                Op::Repr => "OP_REPR",
-                Op::Print => "OP_PRINT",
-                Op::Closure => "OP_CLOSURE",
-                Op::ClosureLong => "OP_CLOSURE_LONG",
-            }
-        )
-    }
+pub fn op_string(op: u8) -> String {
+    format!(
+        "{:16}",
+        match op {
+            OP::NOP => "OP_NOP",
+            OP::HALT => "OP_HALT",
+            OP::ADD => "OP_ADD",
+            OP::SUB => "OP_SUB",
+            OP::MUL => "OP_MUL",
+            OP::DIV => "OP_DIV",
+            OP::ADD_LONG => "OP_ADD_LONG",
+            OP::SUB_LONG => "OP_SUB_LONG",
+            OP::MUL_LONG => "OP_MUL_LONG",
+            OP::DIV_LONG => "OP_DIV_LONG",
+            OP::POP_R0 => "OP_POP_R0",
+            OP::PUSH_R0 => "OP_PUSH_R0",
+            OP::POP => "OP_POP",
+            OP::POP_N => "OP_POP_N",
+            OP::NUM_EQ => "OP_NUM_EQ",
+            OP::NUM_NEQ => "OP_NUM_NEQ",
+            OP::NUM_LT => "OP_NUM_LT",
+            OP::NUM_LTE => "OP_NUM_LTE",
+            OP::NUM_GT => "OP_NUM_GT",
+            OP::NUM_GTE => "OP_NUM_GTE",
+            OP::EQUAL => "OP_EQUAL",
+            OP::DEF_GLOBAL => "OP_DEF_GLOBAL",
+            OP::GET_GLOBAL => "OP_GET_GLOBAL",
+            OP::SET_GLOBAL => "OP_SET_GLOBAL",
+            OP::GET_LOCAL => "OP_GET_LOCAL",
+            OP::GET_LOCAL_LONG => "OP_GET_LOCAL_LONG",
+            OP::SET_LOCAL => "OP_SET_LOCAL",
+            OP::SET_LOCAL_LONG => "OP_SET_LOCAL_LONG",
+            OP::GET_UPVALUE => "OP_GET_UPVALUE",
+            OP::SET_UPVALUE => "OP_SET_UPVALUE",
+            OP::RETURN => "OP_RETURN",
+            OP::CONSTANT => "OP_CONSTANT",
+            OP::CONSTANT_LONG => "OP_CONSTANT_LONG",
+            OP::JUMP => "OP_JUMP",
+            OP::JUMP_TRUE => "OP_JUMP_IF_TRUE",
+            OP::JUMP_FALSE => "OP_JUMP_IF_FALSE",
+            OP::CALL => "OP_CALL",
+            OP::TAIL_CALL => "OP_TAIL_CALL",
+            OP::REPR => "OP_REPR",
+            OP::PRINT => "OP_PRINT",
+            OP::CLOSURE => "OP_CLOSURE",
+            OP::CLOSURE_LONG => "OP_CLOSURE_LONG",
+            OP::CONS => "OP_CONS",
+            OP::CAR => "OP_CAR",
+            OP::CDR => "OP_CDR",
+            OP::LIST => "OP_LIST",
+            OP::LIST_LONG => "OP_LIST_LONG",
+            n => panic!("invalid opcode {}", n),
+        }
+    )
 }
 
 impl<const N: usize> fmt::Display for Instruction<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}  ", self.op)?;
+        write!(f, "{}  ", op_string(self.op))?;
         for n in 0..N {
             write!(f, "0x{:02x}  ", self.operands[n])?;
         }
@@ -88,10 +93,10 @@ impl Chunk {
         }
 
         match ins.op() {
-            Op::Constant => {
+            OP::CONSTANT => {
                 println!("{} ({})", ins, self.constants[ins.get_usize()]);
             }
-            Op::ConstantLong => {
+            OP::CONSTANT_LONG => {
                 println!("{} ({})", ins, self.constants[ins.get_usize()]);
             }
             _ => println!("{}", ins),

@@ -1,7 +1,7 @@
 [package]
 name = "jibi2"
 description = "Interpreter for the jibi2 Scheme dialect."
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Jérome Boisvert-Chouinard"]
 repository = "https://github.com/jbchouinard/jibi2"
 license = "MIT"

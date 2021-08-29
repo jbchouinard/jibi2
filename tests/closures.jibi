@@ -1,0 +1,22 @@
+; Multiple functions closing over the same variable should refer to the same
+; memory location
+
+(def make-closure
+    (fn ()
+        (def x nil)
+        (cons (fn () x) (fn (y) (set! x y)))))
+
+
+(def getter nil)
+(def setter nil)
+
+(let ((closure (make-closure)))
+    (set! getter (car closure))
+    (set! setter (cdr closure)))
+
+(setter 100)
+(print "should be 100: ")
+(print (getter))
+(setter 1337)
+(print "should be 1337: ")
+(print (getter))

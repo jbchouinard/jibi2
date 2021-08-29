@@ -48,8 +48,8 @@ impl Chunk {
     pub fn write_at(&mut self, i: usize, byte: u8) {
         self.code[i] = byte;
     }
-    pub fn write_op(&mut self, op: &Op, line: usize) -> usize {
-        self.write(op.clone() as u8, line)
+    pub fn write_op(&mut self, op: u8, line: usize) -> usize {
+        self.write(op, line)
     }
     pub fn write_instruction<I: Into<AnyInstruction>>(&mut self, ins: I, line: usize) -> usize {
         let ins: AnyInstruction = ins.into();

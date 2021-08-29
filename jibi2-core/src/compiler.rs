@@ -98,7 +98,28 @@ impl FunctionCompiler {
             .code
             .write_constant(val, self.pos.lineno);
     }
-    fn emit_jump(&mut self, op: Op) -> usize {
+    fn emit_return(&mut self) {
+        let mut function = self.function.borrow_mut();
+        let codelen = function.code.code.len();
+        let instructions = AnyInstruction::read_all(&function.code.code[..], 0, codelen);
+
+        let tail_call = self.enclosing.is_some()
+            && !instructions.is_empty()
+            && instructions.last().unwrap().op() == OP::CALL;
+        if tail_call {
+            function.code.code[codelen - 2] = OP::TAIL_CALL;
+        }
+        // Emit an OP::RETURN even if it's a tail call. The OP::RETURN will never be
+        // executed after OP::TAIL_CALL since OP::TAIL_CALL rewrites the current call
+        // frame, but if and cond may have jumps that land right after the OP::TAIL_CALL,
+        // in which case we still need an OP::RETURN here.
+        // TODO?: keep track of whether there is any such jump, only emit OP::RETURN
+        // for tail calls if there is.
+        function
+            .code
+            .write_instruction(instruction_return(), self.pos.lineno);
+    }
+    fn emit_jump(&mut self, op: u8) -> usize {
         self.function
             .borrow_mut()
             .code
@@ -285,7 +306,7 @@ impl FunctionCompiler {
         true
     }
     pub fn end(&mut self) -> (Option<Box<FunctionCompiler>>, FunctionRef) {
-        self.emit_instruction(instruction_return());
+        self.emit_return();
 
         #[cfg(debug_trace_compile)]
         self.function
@@ -425,6 +446,10 @@ impl SexprCompiler {
                 self.sform_simple::<_, 1>(rest.as_pair()?, "print", instruction_print)?
             }
             Some("repr") => self.sform_simple::<_, 1>(rest.as_pair()?, "repr", instruction_repr)?,
+            Some("cons") => self.sform_simple::<_, 2>(rest.as_pair()?, "cons", instruction_cons)?,
+            Some("car") => self.sform_simple::<_, 1>(rest.as_pair()?, "car", instruction_car)?,
+            Some("cdr") => self.sform_simple::<_, 1>(rest.as_pair()?, "cdr", instruction_cdr)?,
+            Some("list") => self.sform_list(&rest)?,
             Some("=") => self.sform_simple::<_, 2>(rest.as_pair()?, "=", instruction_num_eq)?,
             Some("!=") => self.sform_simple::<_, 2>(rest.as_pair()?, "!=", instruction_num_neq)?,
             Some("<") => self.sform_simple::<_, 2>(rest.as_pair()?, "<", instruction_num_lt)?,
@@ -492,10 +517,10 @@ impl SexprCompiler {
             let pred = self.compiler.evaluate(start).as_bool()?;
             self.sexpr(&if pred { then_expr } else { else_expr })?;
         } else {
-            let to_else = self.compiler.emit_jump(Op::JumpFalse);
+            let to_else = self.compiler.emit_jump(OP::JUMP_FALSE);
             self.compiler.emit_instruction(instruction_pop());
             self.sexpr(&then_expr)?;
-            let to_end = self.compiler.emit_jump(Op::Jump);
+            let to_end = self.compiler.emit_jump(OP::JUMP);
             self.compiler.patch_jump(to_else);
             self.compiler.emit_instruction(instruction_pop());
             self.sexpr(&else_expr)?;
@@ -521,10 +546,10 @@ impl SexprCompiler {
                 has_else_clause = true;
                 break;
             } else {
-                let jump_skip = self.compiler.emit_jump(Op::JumpFalse);
+                let jump_skip = self.compiler.emit_jump(OP::JUMP_FALSE);
                 self.compiler.emit_instruction(instruction_pop());
                 self.block(&body)?;
-                jumps_to_end.push(self.compiler.emit_jump(Op::Jump));
+                jumps_to_end.push(self.compiler.emit_jump(OP::JUMP));
                 self.compiler.patch_jump(jump_skip);
                 self.compiler.emit_instruction(instruction_pop());
             }
@@ -551,6 +576,7 @@ impl SexprCompiler {
             &mut self.compiler,
             FunctionCompiler::new(Rc::new("unnamed".to_string())).boxed(),
         );
+        self.compiler.pos = self.pos.clone();
         self.compiler.encloses(prev_compiler);
         self.compiler.begin_scope();
         self.compiler.function.borrow_mut().arity = formals.len();
@@ -562,6 +588,15 @@ impl SexprCompiler {
         self.compiler = prev_compiler.unwrap();
         let n = self.compiler.add_constant(Object::Function(func));
         self.compiler.emit_instruction(instruction_closure(n));
+        Ok(())
+    }
+    fn sform_list(&mut self, list: &Object) -> Result<()> {
+        let exprs: Vec<Object> = list.iter_list()?.collect();
+        for expr in exprs.iter() {
+            self.sexpr(expr)?;
+        }
+        self.compiler
+            .emit_instruction(instruction_list(exprs.len()));
         Ok(())
     }
     fn block(&mut self, list: &Object) -> Result<()> {

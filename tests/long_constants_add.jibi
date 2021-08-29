@@ -1,3 +1,4 @@
+(print "should not crash:")
 (let
     (
         (c1 1)

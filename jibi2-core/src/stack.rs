@@ -21,6 +21,11 @@ impl<T, const N: usize> ArrayStack<T, N> {
         let val = std::mem::replace(&mut self.arr[self.size], MaybeUninit::uninit());
         unsafe { val.assume_init() }
     }
+    pub fn pop_n(&mut self, n: usize) {
+        for _ in 0..n {
+            self.pop();
+        }
+    }
     pub fn peek_ref(&self, from_top: usize) -> &T {
         let n = self.size - from_top - 1;
         unsafe { self.arr[n].assume_init_ref() }
