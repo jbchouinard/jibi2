@@ -34,6 +34,13 @@ impl<T, const N: usize> ArrayStack<T, N> {
         let n = self.size - from_top - 1;
         unsafe { self.arr[n].assume_init_mut() }
     }
+    pub fn peek_slice(&self, n: usize) -> &[T] {
+        if n > self.size {
+            panic!("out of bounds stack read");
+        }
+        unsafe { MaybeUninit::slice_assume_init_ref(&self.arr[self.size - n..self.size]) }
+    }
+
     pub fn get_ref(&self, n: usize) -> &T {
         if n >= self.size {
             panic!("out of bounds stack read");

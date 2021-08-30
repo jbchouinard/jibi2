@@ -1,0 +1,35 @@
+; These functions are baked into the compiler for performance, such that the expression
+; (cons x y) directly compiles to OP_CONS without performing a globals lookup for the
+; cons symbol. They are defined as global functions here so that they can be passed
+; as arguments to higher-order functions. Awkwardly this means that for example the
+; cons symbol could be redefined by user code, but the behavior of (cons x y) will
+; not change. This could be fixed by making the symbols reserved.
+(def print (fn (x) (print x)))
+(def repr (fn (x) (repr x)))
+(def equal? (fn (x y) (equal x y)))
+(def cons (fn (x y) (cons x y)))
+(def car (fn (x) (car x)))
+(def cdr (fn (x) (cdr x)))
+
+(def empty? (fn (lst) (equal? lst ())))
+
+(def range-rec (fn (n lst)
+    (if (< n 0)
+        lst
+        (range-rec (- n 1) (cons n lst)))))
+
+(def range (fn (n) (range-rec (- n 1) ())))
+
+(def foldl (fn (f init lst)
+    (if (empty? lst)
+        init
+        (foldl f (f (car lst) init) (cdr lst)))))
+
+(def reverse (fn (lst) (foldl cons () lst)))
+
+(def map-rec (fn (f init lst)
+    (if (empty? lst)
+        init
+        (map-rec f (cons (f (car lst)) init) (cdr lst)))))
+
+(def map (fn (f lst) (reverse (map-rec f () lst))))

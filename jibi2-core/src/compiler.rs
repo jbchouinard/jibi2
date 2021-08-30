@@ -3,7 +3,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::error::{Error, Result};
-use crate::instruction::*;
+use crate::instruction::{ins, make_long_operands, AnyInstruction, Instruction, OP};
 use crate::object::*;
 use crate::reader::parser::{Parser, SyntaxError};
 use crate::reader::{PositionTag, TokenProducer, Tokenizer};
@@ -70,7 +70,7 @@ impl FunctionCompiler {
             locals: vec![Local::new("".to_string(), 0)],
             upvalues: vec![],
             lists: vec![],
-            pos: PositionTag::new("", 0, 0),
+            pos: PositionTag::new("", 1, 0),
             enclosing: None,
         }
     }
@@ -117,7 +117,7 @@ impl FunctionCompiler {
         // for tail calls if there is.
         function
             .code
-            .write_instruction(instruction_return(), self.pos.lineno);
+            .write_instruction(ins::r#return(), self.pos.lineno);
     }
     fn emit_jump(&mut self, op: u8) -> usize {
         self.function
@@ -138,7 +138,7 @@ impl FunctionCompiler {
         // Global variable: store in globals
         if self.scope_depth == 0 {
             self.emit_constant(Object::Symbol(Rc::new(name)));
-            self.emit_instruction(instruction_def_global());
+            self.emit_instruction(ins::def_global());
             Ok(())
         }
         // Local variable: register local, leave value on stack
@@ -209,15 +209,13 @@ impl FunctionCompiler {
         match var {
             Variable::Global => {
                 self.emit_constant(Object::Symbol(Rc::new(name)));
-                self.emit_instruction(instruction_get_global());
+                self.emit_instruction(ins::get_global());
             }
             Variable::Local(n) => {
-                self.emit_instruction(instruction_get_local(n));
+                self.emit_instruction(ins::get_local(n));
             }
             Variable::Upvalue(n) => {
-                self.emit_instruction(instruction_get_upvalue(
-                    n.try_into().expect("too many upvalues"),
-                ));
+                self.emit_instruction(ins::get_upvalue(n));
             }
         }
         Ok(())
@@ -227,15 +225,13 @@ impl FunctionCompiler {
         match var {
             Variable::Global => {
                 self.emit_constant(Object::Symbol(Rc::new(name)));
-                self.emit_instruction(instruction_set_global());
+                self.emit_instruction(ins::set_global());
             }
             Variable::Local(n) => {
-                self.emit_instruction(instruction_set_local(n));
+                self.emit_instruction(ins::set_local(n));
             }
             Variable::Upvalue(n) => {
-                self.emit_instruction(instruction_set_upvalue(
-                    n.try_into().expect("too many upvalues"),
-                ));
+                self.emit_instruction(ins::set_upvalue(n));
             }
         }
         Ok(())
@@ -251,12 +247,12 @@ impl FunctionCompiler {
             self.locals.pop().unwrap();
             popped += 1;
             if popped == u8::MAX {
-                self.emit_instruction(instruction_pop_n(popped));
+                self.emit_instruction(ins::pop_n(popped));
                 popped = 0;
             }
         }
         if popped > 0 {
-            self.emit_instruction(instruction_pop_n(popped))
+            self.emit_instruction(ins::pop_n(popped))
         }
     }
     fn begin_list(&mut self) {
@@ -273,7 +269,7 @@ impl FunctionCompiler {
         }
     }
     fn evaluate(&mut self, start: usize) -> Object {
-        self.emit_instruction(instruction_halt());
+        self.emit_instruction(ins::halt());
 
         #[cfg(debug_trace_compile)]
         self.function
@@ -332,7 +328,7 @@ impl SexprCompiler {
     pub fn new(name: Rc<String>) -> Self {
         Self {
             compiler: FunctionCompiler::new(name).boxed(),
-            pos: PositionTag::new("", 0, 0),
+            pos: PositionTag::new("", 1, 0),
         }
     }
     pub fn compile(&mut self, sexpr: Object, pos: PositionTag) -> Result<FunctionRef> {
@@ -353,7 +349,7 @@ impl SexprCompiler {
                 self.pos = pos;
                 self.top_level_sexpr(&sexpr)?;
                 if i != last_i {
-                    self.compiler.emit_instruction(instruction_pop());
+                    self.compiler.emit_instruction(ins::pop());
                 }
             }
         }
@@ -423,7 +419,7 @@ impl SexprCompiler {
             self.sexpr(arg)?;
             n += 1;
         }
-        self.compiler.emit_instruction(instruction_apply(n));
+        self.compiler.emit_instruction(ins::apply(n));
         self.compiler.end_list();
         Ok(())
     }
@@ -439,27 +435,23 @@ impl SexprCompiler {
             Some("if") => self.sform_if(&rest)?,
             Some("cond") => self.sform_cond(&rest)?,
             Some("fn") => self.sform_fn(&rest)?,
-            Some("equal?") => {
-                self.sform_simple::<_, 2>(rest.as_pair()?, "equal?", instruction_equal)?
-            }
-            Some("print") => {
-                self.sform_simple::<_, 1>(rest.as_pair()?, "print", instruction_print)?
-            }
-            Some("repr") => self.sform_simple::<_, 1>(rest.as_pair()?, "repr", instruction_repr)?,
-            Some("cons") => self.sform_simple::<_, 2>(rest.as_pair()?, "cons", instruction_cons)?,
-            Some("car") => self.sform_simple::<_, 1>(rest.as_pair()?, "car", instruction_car)?,
-            Some("cdr") => self.sform_simple::<_, 1>(rest.as_pair()?, "cdr", instruction_cdr)?,
+            Some("equal?") => self.sform_simple::<_, 2>(rest.as_pair()?, "equal?", ins::equal)?,
+            Some("print") => self.sform_simple::<_, 1>(rest.as_pair()?, "print", ins::print)?,
+            Some("repr") => self.sform_simple::<_, 1>(rest.as_pair()?, "repr", ins::repr)?,
+            Some("cons") => self.sform_simple::<_, 2>(rest.as_pair()?, "cons", ins::cons)?,
+            Some("car") => self.sform_simple::<_, 1>(rest.as_pair()?, "car", ins::car)?,
+            Some("cdr") => self.sform_simple::<_, 1>(rest.as_pair()?, "cdr", ins::cdr)?,
             Some("list") => self.sform_list(&rest)?,
-            Some("=") => self.sform_simple::<_, 2>(rest.as_pair()?, "=", instruction_num_eq)?,
-            Some("!=") => self.sform_simple::<_, 2>(rest.as_pair()?, "!=", instruction_num_neq)?,
-            Some("<") => self.sform_simple::<_, 2>(rest.as_pair()?, "<", instruction_num_lt)?,
-            Some("<=") => self.sform_simple::<_, 2>(rest.as_pair()?, "<=", instruction_num_lte)?,
-            Some(">") => self.sform_simple::<_, 2>(rest.as_pair()?, ">", instruction_num_gt)?,
-            Some(">=") => self.sform_simple::<_, 2>(rest.as_pair()?, ">=", instruction_num_gte)?,
-            Some("+") => self.sform_var(rest.as_pair()?, instruction_add)?,
-            Some("-") => self.sform_var(rest.as_pair()?, instruction_sub)?,
-            Some("*") => self.sform_var(rest.as_pair()?, instruction_mul)?,
-            Some("/") => self.sform_var(rest.as_pair()?, instruction_div)?,
+            Some("=") => self.sform_simple::<_, 2>(rest.as_pair()?, "=", ins::num_eq)?,
+            Some("!=") => self.sform_simple::<_, 2>(rest.as_pair()?, "!=", ins::num_neq)?,
+            Some("<") => self.sform_simple::<_, 2>(rest.as_pair()?, "<", ins::num_lt)?,
+            Some("<=") => self.sform_simple::<_, 2>(rest.as_pair()?, "<=", ins::num_lte)?,
+            Some(">") => self.sform_simple::<_, 2>(rest.as_pair()?, ">", ins::num_gt)?,
+            Some(">=") => self.sform_simple::<_, 2>(rest.as_pair()?, ">=", ins::num_gte)?,
+            Some("+") => self.sform_var(rest.as_pair()?, ins::add)?,
+            Some("-") => self.sform_var(rest.as_pair()?, ins::sub)?,
+            Some("*") => self.sform_var(rest.as_pair()?, ins::mul)?,
+            Some("/") => self.sform_var(rest.as_pair()?, ins::div)?,
             _ => return Ok(false),
         };
         Ok(true)
@@ -486,7 +478,7 @@ impl SexprCompiler {
     }
     fn sform_var<F: Fn(usize) -> AnyInstruction>(&mut self, pair: PairRef, insf: F) -> Result<()> {
         let args: Vec<Object> = pair.iter()?.collect();
-        for arg in &args {
+        for arg in args.iter() {
             self.sexpr(arg)?;
         }
         self.compiler.emit_instruction(insf(args.len()));
@@ -518,11 +510,11 @@ impl SexprCompiler {
             self.sexpr(&if pred { then_expr } else { else_expr })?;
         } else {
             let to_else = self.compiler.emit_jump(OP::JUMP_FALSE);
-            self.compiler.emit_instruction(instruction_pop());
+            self.compiler.emit_instruction(ins::pop());
             self.sexpr(&then_expr)?;
             let to_end = self.compiler.emit_jump(OP::JUMP);
             self.compiler.patch_jump(to_else);
-            self.compiler.emit_instruction(instruction_pop());
+            self.compiler.emit_instruction(ins::pop());
             self.sexpr(&else_expr)?;
             self.compiler.patch_jump(to_end);
         }
@@ -547,11 +539,11 @@ impl SexprCompiler {
                 break;
             } else {
                 let jump_skip = self.compiler.emit_jump(OP::JUMP_FALSE);
-                self.compiler.emit_instruction(instruction_pop());
+                self.compiler.emit_instruction(ins::pop());
                 self.block(&body)?;
                 jumps_to_end.push(self.compiler.emit_jump(OP::JUMP));
                 self.compiler.patch_jump(jump_skip);
-                self.compiler.emit_instruction(instruction_pop());
+                self.compiler.emit_instruction(ins::pop());
             }
         }
         // In case no condition is fulfilled
@@ -587,7 +579,7 @@ impl SexprCompiler {
         let (prev_compiler, func) = self.compiler.end();
         self.compiler = prev_compiler.unwrap();
         let n = self.compiler.add_constant(Object::Function(func));
-        self.compiler.emit_instruction(instruction_closure(n));
+        self.compiler.emit_instruction(ins::closure(n));
         Ok(())
     }
     fn sform_list(&mut self, list: &Object) -> Result<()> {
@@ -595,8 +587,7 @@ impl SexprCompiler {
         for expr in exprs.iter() {
             self.sexpr(expr)?;
         }
-        self.compiler
-            .emit_instruction(instruction_list(exprs.len()));
+        self.compiler.emit_instruction(ins::list(exprs.len()));
         Ok(())
     }
     fn block(&mut self, list: &Object) -> Result<()> {
@@ -612,7 +603,7 @@ impl SexprCompiler {
             if self.sform_def(element)? {
                 n_defs += 1;
                 if i < n_elems - 1 {
-                    self.compiler.emit_instruction(instruction_pop());
+                    self.compiler.emit_instruction(ins::pop());
                 }
             } else {
                 break;
@@ -622,7 +613,7 @@ impl SexprCompiler {
             self.sexpr(element)?;
             n_exprs += 1;
             if i < n_elems - 1 {
-                self.compiler.emit_instruction(instruction_pop());
+                self.compiler.emit_instruction(ins::pop());
             }
         }
         if n_exprs == 0 {
@@ -643,9 +634,9 @@ impl SexprCompiler {
         // So we save result to R0, end the scope, which pops locals, then push back
         // the result.
         if n_defs > 0 {
-            self.compiler.emit_instruction(instruction_pop_r0());
+            self.compiler.emit_instruction(ins::pop_r0());
             self.compiler.end_scope();
-            self.compiler.emit_instruction(instruction_push_r0());
+            self.compiler.emit_instruction(ins::push_r0());
         // If there were no locals, ending the scope doesn't pop anything,
         // so we don't have to all that.
         } else {

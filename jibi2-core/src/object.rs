@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::chunk::Chunk;
 use crate::compiler::Variable;
 use crate::error::Result;
-use crate::ops::math::Number;
+use crate::native::math::Number;
 use crate::vm::{CallFrame, CallStack, Stack};
 
 pub type IntType = i64;
@@ -60,8 +60,8 @@ impl fmt::Display for Object {
 }
 
 impl Object {
-    pub fn to_number(self) -> Result<Number> {
-        Number::from_val(self)
+    pub fn as_number(&self) -> Result<Number> {
+        Number::from_object(self)
     }
     pub fn as_bool(&self) -> Result<bool> {
         match self {
@@ -116,30 +116,52 @@ impl Object {
     }
 }
 
+// The cdr of the Pair is an Option just to implement iterative dropping.
+// It is always Some(Object) until the Pair is dropped.
 #[derive(Debug, PartialEq, Clone)]
-pub struct Pair(Object, Object);
+pub struct Pair(Object, Option<Object>);
 
 pub type PairRef = Rc<Pair>;
+
+// The default drop is called recursively when dropping a list. This causes
+// stack overflow when dropping a large list (~180k elements in my tests).
+// This implementation iteratively drops the list instead.
+// This requires making the cdr of the pair an Option - since drop is a &mut self
+// function, the cdr cannot be moved out of self - but it can be take()'d.
+impl Drop for Pair {
+    fn drop(&mut self) {
+        let mut next = self.1.take();
+        while let Some(Object::Pair(pref)) = next {
+            if let Ok(mut pair) = Rc::try_unwrap(pref) {
+                next = pair.1.take();
+            } else {
+                break;
+            }
+        }
+    }
+}
 
 impl Pair {
     pub fn into_ref(self) -> PairRef {
         Rc::new(self)
     }
     pub fn cons(x: Object, y: Object) -> Self {
-        Self(x, y)
+        Self(x, Some(y))
     }
     pub fn car(&self) -> Object {
         self.0.clone()
     }
     pub fn cdr(&self) -> Object {
-        self.1.clone()
+        self.1.as_ref().unwrap().clone()
     }
-    // Will blow the stack on circular list...
     pub fn is_list(&self) -> bool {
-        match &self.1 {
-            Object::Nil => true,
-            Object::Pair(c) => c.is_list(),
-            _ => false,
+        let mut next = self.1.as_ref().unwrap();
+        loop {
+            match next {
+                Object::Nil => return true,
+                Object::Pair(pair) => next = pair.1.as_ref().unwrap(),
+                _ => return false,
+            }
         }
     }
     pub fn iter(&self) -> Result<ListIterator> {
@@ -159,13 +181,14 @@ impl Iterator for ListIterator<'_> {
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         match self.head {
             None => None,
-            Some(Pair(x, y)) => {
+            Some(Pair(x, Some(y))) => {
                 match y {
                     Object::Pair(c) => self.head = Some(c),
                     _ => self.head = None,
                 };
                 Some(x.clone())
             }
+            Some(Pair(_, None)) => panic!(),
         }
     }
 }
@@ -251,7 +274,7 @@ impl Closure {
     }
 }
 
-pub type NativeFn = Rc<dyn Fn(usize, &mut Stack) -> Result<()>>;
+pub type NativeFn = Rc<dyn Fn(&[Object], usize) -> Result<Object>>;
 
 static NATIVE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -263,7 +286,7 @@ fn native_function_id() -> usize {
 pub struct NativeFunction {
     id: usize,
     pub name: String,
-    f: NativeFn,
+    pub f: NativeFn,
 }
 
 impl NativeFunction {
@@ -274,8 +297,8 @@ impl NativeFunction {
             f,
         }
     }
-    pub fn call(&self, nargs: usize, stack: &mut Stack) -> Result<()> {
-        (self.f)(nargs, stack)
+    pub fn call(&self, argv: &[Object], argc: usize) -> Result<Object> {
+        (self.f)(argv, argc)
     }
 }
 

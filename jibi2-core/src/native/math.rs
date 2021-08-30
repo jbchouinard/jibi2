@@ -1,72 +1,91 @@
-#![allow(dead_code)]
+use std::rc::Rc;
 
 use crate::error::{ArgumentError, Result, RuntimeError};
+use crate::native::expect_n_args;
 use crate::object::{FloatType, IntType, Object, TypeError};
-use crate::{binary_op, vararg_op};
+use crate::vm::VM;
+use crate::{binary_native_fn, native_fn};
 
-vararg_op!(op_add, nargs, stack {
+native_fn!(native_add, argv, argc, {
     let mut acc = Number::Int(0);
-    for _ in 0..nargs {
-        acc = acc.add(&stack.pop().to_number()?)?;
+    for arg in argv.iter().take(argc) {
+        acc = acc.add(&arg.as_number()?)?;
     }
-    stack.push(acc.to_val());
+    Ok(acc.to_object())
 });
 
-vararg_op!(op_sub, nargs, stack {
-    if nargs < 1 {
+native_fn!(native_sub, argv, argc, {
+    if argc < 1 {
         return Err(ArgumentError::new("need at least 1 arg".to_string()).into());
     }
-    let mut acc = Number::Int(0);
-    for _ in 0..nargs-1 {
-        acc = acc.sub(&stack.pop().to_number()?)?;
+    let mut acc = argv[0].as_number()?;
+    if argc == 1 {
+        acc = Number::Int(0).sub(&acc)?;
     }
-    acc = acc.add(&stack.pop().to_number()?)?;
-    stack.push(acc.to_val());
+    for arg in argv.iter().take(argc).skip(1) {
+        acc = acc.sub(&arg.as_number()?)?;
+    }
+    Ok(acc.to_object())
 });
 
-vararg_op!(op_mul, nargs, stack {
+native_fn!(native_mul, argv, argc, {
     let mut acc = Number::Int(1);
-    for _ in 0..nargs {
-        acc = acc.mul(&stack.pop().to_number()?)?;
+    for arg in argv.iter().take(argc) {
+        acc = acc.mul(&arg.as_number()?)?;
     }
-    stack.push(acc.to_val());
+    Ok(acc.to_object())
 });
 
-vararg_op!(op_div, nargs, stack {
-    if nargs < 1 {
+native_fn!(native_div, argv, argc, {
+    if argc < 1 {
         return Err(ArgumentError::new("need at least 1 arg".to_string()).into());
     }
-    let mut acc = Number::Int(1);
-    for _ in 0..nargs-1 {
-        acc = acc.div(&stack.pop().to_number()?)?;
+    let mut acc = argv[0].as_number()?;
+    if argc == 1 {
+        acc = Number::Int(1).div(&acc)?;
     }
-    acc = acc.mul(&stack.pop().to_number()?)?;
-    stack.push(acc.to_val());
+    for arg in argv.iter().take(argc).skip(1) {
+        acc = acc.div(&arg.as_number()?)?;
+    }
+    Ok(acc.to_object())
 });
 
-binary_op!(op_num_eq, x, y, {
-    Object::Bool(x.to_number()?.eq(&y.to_number()?)?)
+binary_native_fn!(native_num_eq, x, y, {
+    Object::Bool(x.as_number()?.eq(&y.as_number()?)?)
 });
 
-binary_op!(op_num_neq, x, y, {
-    Object::Bool(x.to_number()?.neq(&y.to_number()?)?)
+binary_native_fn!(native_num_neq, x, y, {
+    Object::Bool(x.as_number()?.neq(&y.as_number()?)?)
 });
 
-binary_op!(op_num_lt, x, y, {
-    Object::Bool(x.to_number()?.lt(&y.to_number()?)?)
+binary_native_fn!(native_num_lt, x, y, {
+    Object::Bool(x.as_number()?.lt(&y.as_number()?)?)
 });
 
-binary_op!(op_num_lte, x, y, {
-    Object::Bool(x.to_number()?.lte(&y.to_number()?)?)
+binary_native_fn!(native_num_lte, x, y, {
+    Object::Bool(x.as_number()?.lte(&y.as_number()?)?)
 });
 
-binary_op!(op_num_gt, x, y, {
-    Object::Bool(x.to_number()?.gte(&y.to_number()?)?)
+binary_native_fn!(native_num_gt, x, y, {
+    Object::Bool(x.as_number()?.gt(&y.as_number()?)?)
 });
 
-binary_op!(op_num_gte, x, y, {
-    Object::Bool(x.to_number()?.gte(&y.to_number()?)?)
+binary_native_fn!(native_num_gte, x, y, {
+    Object::Bool(x.as_number()?.gte(&y.as_number()?)?)
 });
+
+pub fn add_native_functions(vm: &mut VM) {
+    vm.define_native("+", Rc::new(native_add));
+    vm.define_native("-", Rc::new(native_sub));
+    vm.define_native("*", Rc::new(native_mul));
+    vm.define_native("/", Rc::new(native_div));
+    vm.define_native("=", Rc::new(native_num_eq));
+    vm.define_native("!=", Rc::new(native_num_neq));
+    vm.define_native("<", Rc::new(native_num_lt));
+    vm.define_native("<=", Rc::new(native_num_lte));
+    vm.define_native(">", Rc::new(native_num_gt));
+    vm.define_native(">=", Rc::new(native_num_gte));
+}
 
 pub enum Number {
     Int(IntType),
@@ -82,14 +101,14 @@ fn int_to_float(n: &IntType) -> Result<FloatType> {
 }
 
 impl Number {
-    pub fn from_val(val: Object) -> Result<Self> {
+    pub fn from_object(val: &Object) -> Result<Self> {
         match val {
-            Object::Int(n) => Ok(Self::Int(n)),
-            Object::Float(x) => Ok(Self::Float(x)),
+            Object::Int(n) => Ok(Self::Int(*n)),
+            Object::Float(x) => Ok(Self::Float(*x)),
             _ => Err(TypeError::new("number".to_string()).into()),
         }
     }
-    pub fn to_val(&self) -> Object {
+    pub fn to_object(&self) -> Object {
         match self {
             Self::Int(n) => Object::Int(*n),
             Self::Float(x) => Object::Float(*x),
@@ -99,12 +118,6 @@ impl Number {
         match self {
             Self::Float(x) => Ok(*x),
             Self::Int(n) => int_to_float(n),
-        }
-    }
-    fn as_int(&self) -> Result<IntType> {
-        match self {
-            Self::Int(n) => Ok(*n),
-            Self::Float(x) => Ok(*x as IntType),
         }
     }
     #[inline(always)]

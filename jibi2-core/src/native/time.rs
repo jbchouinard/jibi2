@@ -3,17 +3,15 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::Result;
+use crate::native::expect_n_args;
 use crate::object::Object;
-use crate::vm::{Stack, VM};
+use crate::vm::VM;
 
-fn native_now(nargs: usize, stack: &mut Stack) -> Result<()> {
-    for _ in 0..nargs {
-        stack.pop();
-    }
+fn native_now(_argv: &[Object], argc: usize) -> Result<Object> {
+    expect_n_args(argc, 0)?;
     let now = SystemTime::now();
     let ts = now.duration_since(UNIX_EPOCH).unwrap();
-    stack.push(Object::Int(ts.as_millis().try_into().unwrap()));
-    Ok(())
+    Ok(Object::Int(ts.as_millis().try_into().unwrap()))
 }
 
 pub fn add_native_functions(vm: &mut VM) {

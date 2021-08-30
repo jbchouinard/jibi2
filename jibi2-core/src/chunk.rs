@@ -2,7 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::instruction::*;
+use crate::instruction::{ins, AnyInstruction};
 use crate::object::{IntType, Object};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,7 +86,7 @@ impl Chunk {
     }
     pub fn write_constant(&mut self, val: Object, line: usize) -> usize {
         let n = self.add_constant(val);
-        self.write_instruction(instruction_constant(n), line)
+        self.write_instruction(ins::constant(n), line)
     }
 }
 

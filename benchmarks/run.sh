@@ -2,9 +2,9 @@
 set -eu
 
 echo "fibonacci(35)"
-# echo "jibi"
-# time jibi benchmarks/fibonacci.jibi
-# echo "-----------------------------"
+echo "jibi"
+time jibi benchmarks/fibonacci.jibi
+echo "-----------------------------"
 echo "jibi2"
 time jibi2 benchmarks/fibonacci.jibi
 echo "-----------------------------"

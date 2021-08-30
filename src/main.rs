@@ -11,6 +11,8 @@ use jibi2::vm::VM;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+const PRELUDE: &str = include_str!("prelude.jibi");
+
 #[derive(StructOpt, Debug)]
 struct Opt {
     #[structopt(short, long)]
@@ -33,6 +35,8 @@ fn main() {
     }
 
     let mut interpreter = Interpreter::new();
+
+    interpreter.exec_source("#PRELUDE", PRELUDE);
 
     for file in &files {
         interpreter.exec_file(file);
@@ -102,13 +106,8 @@ impl Interpreter {
         }
     }
 
-    pub fn exec_file<P: AsRef<Path>>(&mut self, path: P) {
-        let file: &Path = path.as_ref();
-        let source = std::fs::read_to_string(&file).unwrap();
-        match self
-            .vm
-            .load_source(&file.to_string_lossy().to_string(), &source)
-        {
+    pub fn exec_source(&mut self, name: &str, source: &str) {
+        match self.vm.load_source(name, source) {
             Ok(()) => (),
             Err(e) => {
                 eprintln!("Compilation error: {}", e);
@@ -123,6 +122,13 @@ impl Interpreter {
                 std::process::exit(1);
             }
         }
+    }
+
+    pub fn exec_file<P: AsRef<Path>>(&mut self, path: P) {
+        let file: &Path = path.as_ref();
+        let source = std::fs::read_to_string(&file).unwrap();
+        let name = file.to_string_lossy();
+        self.exec_source(&name.to_string(), &source);
     }
 
     /// Get tokens that looks like they form a complete expression (balanced parens)

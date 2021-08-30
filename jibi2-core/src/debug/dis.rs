@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::chunk::Chunk;
-use crate::instruction::*;
+use crate::instruction::{AnyInstruction, Instruction, OP};
 
 pub fn op_string(op: u8) -> String {
     format!(

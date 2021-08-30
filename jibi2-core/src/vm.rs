@@ -6,17 +6,17 @@ use hashbrown::HashMap;
 
 use crate::compiler::{compile_source, compile_tokens, Variable};
 use crate::error::{ArgumentError, Error, Result, RuntimeError};
-use crate::instruction::*;
+use crate::instruction::OP;
 use crate::native::add_native_functions;
+use crate::native::math::*;
+use crate::native::*;
 use crate::object::{Closure, ClosureRef, NativeFn, NativeFunction, Object, Pair, TypeError};
-use crate::ops::*;
 use crate::reader::TokenProducer;
 use crate::stack::ArrayStack;
 
 // 512KiB / 16 bytes per Object
 pub type Stack = ArrayStack<Object, { 512 * 1024 / 16 }>;
-// 512KiB / 24 bytes per CallFrame
-pub type CallStack = ArrayStack<CallFrame, { 512 * 1024 / 24 }>;
+pub type CallStack = ArrayStack<CallFrame, { 16 * 1024 }>;
 
 pub struct VM {
     pub stack: Stack,
@@ -148,6 +148,24 @@ impl VM {
                 frame!().closure.borrow().function.code.constants[n].clone()
             }};
         }
+        macro_rules! call_native_fn {
+            ($argc:expr, $native:expr) => {{
+                let argc = $argc;
+                let argv = self.stack.peek_slice(argc);
+                let result = $native(argv, argc)?;
+                self.stack.pop_n(argc + 1);
+                self.stack.push(result);
+            }};
+        }
+        macro_rules! call_native_op {
+            ($argc:expr, $native:expr) => {{
+                let argc = $argc;
+                let argv = self.stack.peek_slice(argc);
+                let result = $native(argv, argc)?;
+                self.stack.pop_n(argc);
+                self.stack.push(result);
+            }};
+        }
 
         loop {
             if self.frames.size == 0 {
@@ -192,17 +210,17 @@ impl VM {
                     println!("{}", s);
                     self.stack.push(Object::Nil);
                 }
-                OP::ADD | OP::ADD_LONG => op_add(&mut self.stack, read_operand!(op))?,
-                OP::SUB | OP::SUB_LONG => op_sub(&mut self.stack, read_operand!(op))?,
-                OP::MUL | OP::MUL_LONG => op_mul(&mut self.stack, read_operand!(op))?,
-                OP::DIV | OP::DIV_LONG => op_div(&mut self.stack, read_operand!(op))?,
-                OP::NUM_EQ => op_num_eq(&mut self.stack)?,
-                OP::NUM_NEQ => op_num_neq(&mut self.stack)?,
-                OP::NUM_LT => op_num_lt(&mut self.stack)?,
-                OP::NUM_LTE => op_num_lte(&mut self.stack)?,
-                OP::NUM_GT => op_num_gt(&mut self.stack)?,
-                OP::NUM_GTE => op_num_gte(&mut self.stack)?,
-                OP::EQUAL => op_equal(&mut self.stack)?,
+                OP::ADD | OP::ADD_LONG => call_native_op!(read_operand!(op), native_add),
+                OP::SUB | OP::SUB_LONG => call_native_op!(read_operand!(op), native_sub),
+                OP::MUL | OP::MUL_LONG => call_native_op!(read_operand!(op), native_mul),
+                OP::DIV | OP::DIV_LONG => call_native_op!(read_operand!(op), native_div),
+                OP::NUM_EQ => call_native_op!(2, native_num_eq),
+                OP::NUM_NEQ => call_native_op!(2, native_num_neq),
+                OP::NUM_LT => call_native_op!(2, native_num_lt),
+                OP::NUM_LTE => call_native_op!(2, native_num_lte),
+                OP::NUM_GT => call_native_op!(2, native_num_gt),
+                OP::NUM_GTE => call_native_op!(2, native_num_gte),
+                OP::EQUAL => call_native_op!(2, native_equal),
                 OP::POP_R0 => {
                     self.register0 = Some(self.stack.pop());
                 }
@@ -287,7 +305,7 @@ impl VM {
                     }
                 }
                 OP::CALL => {
-                    let nargs = read_operand!(op) as usize;
+                    let nargs = read_operand!(op);
                     let func = self.stack.peek_ref(nargs).clone();
                     match func {
                         Object::Closure(clos) => {
@@ -303,11 +321,7 @@ impl VM {
                             self.frames.push(CallFrame::new(Rc::clone(&clos), 0, fp));
                         }
                         Object::NativeFunction(function) => {
-                            function.call(nargs, &mut self.stack)?;
-                            let result = self.stack.pop();
-                            // Pop off function value
-                            self.stack.pop();
-                            self.stack.push(result);
+                            call_native_fn!(nargs, function.f);
                         }
                         _ => return Err(TypeError::new("callable".to_string()).into()),
                     }
@@ -322,7 +336,7 @@ impl VM {
                 }
                 OP::TAIL_CALL => {
                     // Save the function being called and its arguments
-                    let nargs = read_operand!(op) as usize;
+                    let nargs = read_operand!(op);
                     let mut saved = vec![];
                     for _ in 0..nargs + 1 {
                         saved.push(self.stack.pop());
@@ -359,11 +373,7 @@ impl VM {
                         Object::NativeFunction(function) => {
                             // Native functions don't use call frames, so pop it
                             self.frames.pop();
-                            function.call(nargs, &mut self.stack)?;
-                            let result = self.stack.pop();
-                            // Pop off function value
-                            self.stack.pop();
-                            self.stack.push(result);
+                            call_native_fn!(nargs, function.f);
                         }
                         _ => return Err(TypeError::new("callable".to_string()).into()),
                     }

@@ -1,0 +1,21 @@
+(def abs
+    (fn (x)
+        (if (< x 0.0)
+            (- x)
+            x)))
+
+(def fixed-point (fn (f init epsilon)
+    (let ((next (f init)))
+        (if (< (abs (- next init)) epsilon)
+            next
+            (fixed-point f next epsilon)))))
+
+(def fixed-sqrt (fn (a)
+    (fn (x)
+        (/ (+ x (/ a x)) 2.0))))
+
+(def epsilon 0.000000000000000000001)
+
+(def sqrt (fn (x) (fixed-point (fixed-sqrt x) x epsilon)))
+
+(print (repr (sqrt 1003219803213223)))

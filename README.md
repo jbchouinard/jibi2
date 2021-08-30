@@ -3,13 +3,13 @@
 # jibi2
 
 A re-implementation of [jibi](https://github.com/jbchouinard/jibi) with a stack-based
-bytecode compiler and VM instead of an AST interpreter, so that maybe it won't be
-horribly, horribly slow.
+bytecode compiler and VM with tail call optimization, instead of an AST interpreter,
+so that it's not horribly slow, and doesn't blow the stack on recursive function calls.
 
 The overall design and some of the code was inspired by
 [Crafting Interpreters](https://craftinginterpreters.com),
 however a lot of implementation details are different because of differences between
-Rust and C.
+Rust and C, and between jibi2 and Lox.
 
 ---
 
