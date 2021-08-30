@@ -22,7 +22,6 @@ jobs:
         run: |
           rustup default nightly
           rustup target add $env:CARGO_BUILD_TARGET
-          cargo clippy --release
           cargo test --release
           cargo run --release -- tests/*.jibi
           cargo build --release
@@ -43,7 +42,6 @@ jobs:
       run: |
         rustup default nightly
         rustup target add $CARGO_BUILD_TARGET
-        cargo clippy --release
         cargo test --release
         cargo run --release -- tests/*.jibi
         cargo build --release
