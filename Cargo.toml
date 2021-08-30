@@ -1,7 +1,7 @@
 [package]
 name = "jibi2"
 description = "Interpreter for the jibi2 Scheme dialect."
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Jérome Boisvert-Chouinard"]
 repository = "https://github.com/jbchouinard/jibi2"
 license = "MIT"
@@ -16,5 +16,3 @@ home = "0.5.3"
 rustyline = "8.2"
 structopt = "0.3"
 
-[profile.release]
-debug = true
