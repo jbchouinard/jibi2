@@ -17,7 +17,7 @@ impl Parser {
         let mut this = Self {
             tokens,
             // Dummy value until we read the first real token
-            peek: Token::new(TokenValue::Eof, PositionTag::new("", 0, 0)),
+            peek: Token::new(TokenValue::None, PositionTag::new("", 0, 0)),
         };
         this.next().unwrap();
         this
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_7() {
+    fn test_parser_5() {
         let expected = Object::Float(2.025);
         test_parser("2.025", expected);
     }

@@ -22,4 +22,4 @@ test:
 clean:
 	cargo clean
 
-.PHONY: default build doc install test clean gh-pages
+.PHONY: default build doc install test clean

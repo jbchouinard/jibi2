@@ -7,7 +7,7 @@ use crate::chunk::Chunk;
 use crate::compiler::Variable;
 use crate::error::Result;
 use crate::native::math::Number;
-use crate::vm::{CallFrame, CallStack, Stack};
+use crate::vm::{CallFrame, CallStack, Stack, VM};
 
 pub type IntType = i64;
 pub type FloatType = f64;
@@ -339,22 +339,22 @@ impl fmt::Display for TypeError {
     }
 }
 
+fn normbytes(n: usize) -> String {
+    if n >= 1024 {
+        format!("{} KiB", n / 1024)
+    } else {
+        format!("{} B", n)
+    }
+}
+
 fn printsize<T>(name: &str) {
-    println!("size of {}: {} bytes", name, std::mem::size_of::<T>());
+    println!("size of {}: {}", name, normbytes(std::mem::size_of::<T>()));
 }
 
 pub fn debug_print_object_sizes() {
     printsize::<Object>("Object");
-    printsize::<bool>("Bool");
-    printsize::<IntType>("Int");
-    printsize::<FloatType>("Float");
-    printsize::<String>("String");
-    printsize::<Rc<String>>("StringRef");
-    printsize::<Function>("Function");
-    printsize::<FunctionRef>("FunctionRef");
-    printsize::<NativeFunction>("NativeFunction");
-    printsize::<NativeFunctionRef>("NativeFunctionRef");
     printsize::<Stack>("Stack");
     printsize::<CallFrame>("CallFrame");
     printsize::<CallStack>("CallStack");
+    printsize::<VM>("VM");
 }

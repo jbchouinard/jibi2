@@ -8,15 +8,16 @@ use crate::compiler::{compile_source, compile_tokens, Variable};
 use crate::error::{ArgumentError, Error, Result, RuntimeError};
 use crate::instruction::OP;
 use crate::native::add_native_functions;
+use crate::native::base::*;
 use crate::native::math::*;
-use crate::native::*;
 use crate::object::{Closure, ClosureRef, NativeFn, NativeFunction, Object, Pair, TypeError};
 use crate::reader::TokenProducer;
 use crate::stack::ArrayStack;
 
-// 512KiB / 16 bytes per Object
-pub type Stack = ArrayStack<Object, { 512 * 1024 / 16 }>;
-pub type CallStack = ArrayStack<CallFrame, { 16 * 1024 }>;
+// 32 * 1024 * 16 bytes = 256KiB
+pub type Stack = ArrayStack<Object, { 16 * 1024 }>;
+// 4 * 1024 * 48 bytes = 192KiB
+pub type CallStack = ArrayStack<CallFrame, { 4 * 1024 }>;
 
 pub struct VM {
     pub stack: Stack,
@@ -153,7 +154,7 @@ impl VM {
                 let argc = $argc;
                 let argv = self.stack.peek_slice(argc);
                 let result = $native(argv, argc)?;
-                self.stack.pop_n(argc + 1);
+                self.stack.popfree_n(argc + 1);
                 self.stack.push(result);
             }};
         }
@@ -162,7 +163,7 @@ impl VM {
                 let argc = $argc;
                 let argv = self.stack.peek_slice(argc);
                 let result = $native(argv, argc)?;
-                self.stack.pop_n(argc);
+                self.stack.popfree_n(argc);
                 self.stack.push(result);
             }};
         }
@@ -181,58 +182,32 @@ impl VM {
             let op = read_op!();
             match op {
                 OP::NOP => (),
+                OP::HALT => return Ok(self.stack.maybe_pop()),
                 OP::JUMP => {
-                    let jmp = read_operand!(op) as usize;
+                    let jmp = read_operand!(op);
                     mutframe!().ip += jmp;
                 }
                 OP::JUMP_TRUE => {
-                    let jmp = read_operand!(op) as usize;
+                    let jmp = read_operand!(op);
                     if self.peek(0).as_bool()? {
                         mutframe!().ip += jmp;
                     }
                 }
                 OP::JUMP_FALSE => {
-                    let jmp = read_operand!(op) as usize;
+                    let jmp = read_operand!(op);
                     if !self.peek(0).as_bool()? {
                         mutframe!().ip += jmp;
                     }
                 }
-                OP::REPR => {
-                    let val = self.stack.pop();
-                    self.stack.push(Object::String(Rc::new(val.to_string())));
+                OP::CONSTANT | OP::CONSTANT_LONG => {
+                    self.stack.push(read_constant!(op));
                 }
-                OP::PRINT => {
-                    let val = self.stack.pop();
-                    let s = match val {
-                        Object::String(s) => s.to_string(),
-                        _ => val.to_string(),
-                    };
-                    println!("{}", s);
-                    self.stack.push(Object::Nil);
-                }
-                OP::ADD | OP::ADD_LONG => call_native_op!(read_operand!(op), native_add),
-                OP::SUB | OP::SUB_LONG => call_native_op!(read_operand!(op), native_sub),
-                OP::MUL | OP::MUL_LONG => call_native_op!(read_operand!(op), native_mul),
-                OP::DIV | OP::DIV_LONG => call_native_op!(read_operand!(op), native_div),
-                OP::NUM_EQ => call_native_op!(2, native_num_eq),
-                OP::NUM_NEQ => call_native_op!(2, native_num_neq),
-                OP::NUM_LT => call_native_op!(2, native_num_lt),
-                OP::NUM_LTE => call_native_op!(2, native_num_lte),
-                OP::NUM_GT => call_native_op!(2, native_num_gt),
-                OP::NUM_GTE => call_native_op!(2, native_num_gte),
-                OP::EQUAL => call_native_op!(2, native_equal),
+                OP::POP => self.stack.popfree(),
+                OP::POP_N => self.stack.popfree_n(read_operand!(op)),
                 OP::POP_R0 => {
                     self.register0 = Some(self.stack.pop());
                 }
                 OP::PUSH_R0 => self.stack.push(self.register0.take().unwrap()),
-                OP::POP => {
-                    self.stack.pop();
-                }
-                OP::POP_N => {
-                    for _ in 0..read_operand!(op) {
-                        self.stack.pop();
-                    }
-                }
                 OP::DEF_GLOBAL => {
                     let sym = self.stack.pop().as_symbol()?.to_string();
                     let val = self.stack.pop();
@@ -270,16 +245,13 @@ impl VM {
                 OP::GET_UPVALUE => {
                     let n = read_operand!(op);
                     let closure = self.stack.get_ref(frame!().fp).as_closure()?;
-                    self.stack.push(closure.borrow().get_upvalue(n as usize));
+                    self.stack.push(closure.borrow().get_upvalue(n));
                 }
                 OP::SET_UPVALUE => {
                     let n = read_operand!(op);
                     let val = self.stack.pop();
                     let closure = self.stack.get_ref(frame!().fp).as_closure()?;
-                    closure.borrow_mut().set_upvalue(n as usize, val);
-                }
-                OP::CONSTANT | OP::CONSTANT_LONG => {
-                    self.stack.push(read_constant!(op));
+                    closure.borrow_mut().set_upvalue(n, val);
                 }
                 OP::CLOSURE | OP::CLOSURE_LONG => {
                     let func = read_constant!(op).as_function()?;
@@ -295,14 +267,6 @@ impl VM {
                         })
                     }
                     self.stack.push(Object::Closure(closure.into_ref()));
-                }
-                OP::HALT => {
-                    if self.stack.size == 0 {
-                        return Ok(None);
-                    } else {
-                        let res = self.stack.pop();
-                        return Ok(Some(res));
-                    }
                 }
                 OP::CALL => {
                     let nargs = read_operand!(op);
@@ -331,7 +295,7 @@ impl VM {
                     let result = self.stack.pop();
                     // Pop off arguments and function
                     self.stack
-                        .pop_n(returning.closure.borrow().function.arity + 1);
+                        .popfree_n(returning.closure.borrow().function.arity + 1);
                     self.stack.push(result);
                 }
                 OP::TAIL_CALL => {
@@ -345,7 +309,8 @@ impl VM {
                     let frame = mutframe!();
 
                     // Pop off function object and locals of current function call
-                    self.stack.pop_n(frame.closure.borrow().function.arity + 1);
+                    self.stack
+                        .popfree_n(frame.closure.borrow().function.arity + 1);
 
                     // Push back the next function and its arguments
                     while !saved.is_empty() {
@@ -372,12 +337,25 @@ impl VM {
                         }
                         Object::NativeFunction(function) => {
                             // Native functions don't use call frames, so pop it
-                            self.frames.pop();
+                            self.frames.popfree();
                             call_native_fn!(nargs, function.f);
                         }
                         _ => return Err(TypeError::new("callable".to_string()).into()),
                     }
                 }
+                OP::PRINT => call_native_op!(1, native_print),
+                OP::REPR => call_native_op!(1, native_repr),
+                OP::EQUAL => call_native_op!(2, native_equal),
+                OP::ADD | OP::ADD_LONG => call_native_op!(read_operand!(op), native_add),
+                OP::SUB | OP::SUB_LONG => call_native_op!(read_operand!(op), native_sub),
+                OP::MUL | OP::MUL_LONG => call_native_op!(read_operand!(op), native_mul),
+                OP::DIV | OP::DIV_LONG => call_native_op!(read_operand!(op), native_div),
+                OP::NUM_EQ => call_native_op!(2, native_num_eq),
+                OP::NUM_NEQ => call_native_op!(2, native_num_neq),
+                OP::NUM_LT => call_native_op!(2, native_num_lt),
+                OP::NUM_LTE => call_native_op!(2, native_num_lte),
+                OP::NUM_GT => call_native_op!(2, native_num_gt),
+                OP::NUM_GTE => call_native_op!(2, native_num_gte),
                 OP::CONS => {
                     let x = self.stack.pop();
                     let y = self.stack.pop();

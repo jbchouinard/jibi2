@@ -93,10 +93,7 @@ impl Chunk {
         }
 
         match ins.op() {
-            OP::CONSTANT => {
-                println!("{} ({})", ins, self.constants[ins.get_usize()]);
-            }
-            OP::CONSTANT_LONG => {
+            OP::CONSTANT | OP::CONSTANT_LONG | OP::CLOSURE | OP::CLOSURE_LONG => {
                 println!("{} ({})", ins, self.constants[ins.get_usize()]);
             }
             _ => println!("{}", ins),

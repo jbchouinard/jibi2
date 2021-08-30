@@ -5,6 +5,5 @@
 
 (def sum (fn (n) (sum-iter n 0)))
 
-
 (print "should not overflow the stack:")
 (print (sum 100000))

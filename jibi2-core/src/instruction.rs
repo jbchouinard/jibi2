@@ -21,16 +21,19 @@ pub mod OP {
     pub const JUMP_FALSE: u8 = 0b00001110 | LONG;
 
     pub const CONSTANT: u8 = 0b00010000;
+    pub const CONSTANT_LONG: u8 = CONSTANT | LONG;
+
     pub const DEF_GLOBAL: u8 = 0b00010001;
     pub const GET_GLOBAL: u8 = 0b00010010;
     pub const SET_GLOBAL: u8 = 0b00010011;
+
     pub const GET_LOCAL: u8 = 0b00010100;
     pub const SET_LOCAL: u8 = 0b00010101;
-    pub const GET_UPVALUE: u8 = 0b00010110;
-    pub const SET_UPVALUE: u8 = 0b00010111;
-    pub const CONSTANT_LONG: u8 = CONSTANT | LONG;
     pub const GET_LOCAL_LONG: u8 = GET_LOCAL | LONG;
     pub const SET_LOCAL_LONG: u8 = SET_LOCAL | LONG;
+
+    pub const GET_UPVALUE: u8 = 0b00010110;
+    pub const SET_UPVALUE: u8 = 0b00010111;
     pub const GET_UPVALUE_LONG: u8 = GET_UPVALUE | LONG;
     pub const SET_UPVALUE_LONG: u8 = SET_UPVALUE | LONG;
 

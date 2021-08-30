@@ -12,20 +12,42 @@ impl<T, const N: usize> ArrayStack<T, N> {
             arr: unsafe { MaybeUninit::uninit().assume_init() },
         }
     }
+
     pub fn push(&mut self, val: T) {
         unsafe { self.arr[self.size].as_mut_ptr().write(val) };
         self.size += 1;
     }
+
     pub fn pop(&mut self) -> T {
         self.size -= 1;
         let val = std::mem::replace(&mut self.arr[self.size], MaybeUninit::uninit());
         unsafe { val.assume_init() }
     }
-    pub fn pop_n(&mut self, n: usize) {
-        for _ in 0..n {
-            self.pop();
+    pub fn popfree(&mut self) {
+        self.size -= 1;
+        self.arr[self.size] = MaybeUninit::uninit();
+    }
+    pub fn maybe_pop(&mut self) -> Option<T> {
+        if self.size == 0 {
+            None
+        } else {
+            Some(self.pop())
         }
     }
+    pub fn pop_n(&mut self, n: usize) -> Vec<T> {
+        let mut v = vec![];
+        for _ in 0..n {
+            v.push(self.pop());
+        }
+        v
+    }
+    pub fn popfree_n(&mut self, n: usize) {
+        self.size -= n;
+        for i in 0..n {
+            self.arr[self.size + i] = MaybeUninit::uninit();
+        }
+    }
+
     pub fn peek_ref(&self, from_top: usize) -> &T {
         let n = self.size - from_top - 1;
         unsafe { self.arr[n].assume_init_ref() }
@@ -35,9 +57,6 @@ impl<T, const N: usize> ArrayStack<T, N> {
         unsafe { self.arr[n].assume_init_mut() }
     }
     pub fn peek_slice(&self, n: usize) -> &[T] {
-        if n > self.size {
-            panic!("out of bounds stack read");
-        }
         unsafe { MaybeUninit::slice_assume_init_ref(&self.arr[self.size - n..self.size]) }
     }
 

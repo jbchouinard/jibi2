@@ -1,12 +1,11 @@
 use std::rc::Rc;
 
 use crate::error::{ArgumentError, Result, RuntimeError};
-use crate::native::expect_n_args;
 use crate::object::{FloatType, IntType, Object, TypeError};
 use crate::vm::VM;
-use crate::{binary_native_fn, native_fn};
+use crate::{native_fn, native_fn_varia};
 
-native_fn!(native_add, argv, argc, {
+native_fn_varia!(native_add, argv, argc, {
     let mut acc = Number::Int(0);
     for arg in argv.iter().take(argc) {
         acc = acc.add(&arg.as_number()?)?;
@@ -14,7 +13,7 @@ native_fn!(native_add, argv, argc, {
     Ok(acc.to_object())
 });
 
-native_fn!(native_sub, argv, argc, {
+native_fn_varia!(native_sub, argv, argc, {
     if argc < 1 {
         return Err(ArgumentError::new("need at least 1 arg".to_string()).into());
     }
@@ -28,7 +27,7 @@ native_fn!(native_sub, argv, argc, {
     Ok(acc.to_object())
 });
 
-native_fn!(native_mul, argv, argc, {
+native_fn_varia!(native_mul, argv, argc, {
     let mut acc = Number::Int(1);
     for arg in argv.iter().take(argc) {
         acc = acc.mul(&arg.as_number()?)?;
@@ -36,7 +35,7 @@ native_fn!(native_mul, argv, argc, {
     Ok(acc.to_object())
 });
 
-native_fn!(native_div, argv, argc, {
+native_fn_varia!(native_div, argv, argc, {
     if argc < 1 {
         return Err(ArgumentError::new("need at least 1 arg".to_string()).into());
     }
@@ -50,27 +49,27 @@ native_fn!(native_div, argv, argc, {
     Ok(acc.to_object())
 });
 
-binary_native_fn!(native_num_eq, x, y, {
+native_fn!(native_num_eq, x, y, {
     Object::Bool(x.as_number()?.eq(&y.as_number()?)?)
 });
 
-binary_native_fn!(native_num_neq, x, y, {
+native_fn!(native_num_neq, x, y, {
     Object::Bool(x.as_number()?.neq(&y.as_number()?)?)
 });
 
-binary_native_fn!(native_num_lt, x, y, {
+native_fn!(native_num_lt, x, y, {
     Object::Bool(x.as_number()?.lt(&y.as_number()?)?)
 });
 
-binary_native_fn!(native_num_lte, x, y, {
+native_fn!(native_num_lte, x, y, {
     Object::Bool(x.as_number()?.lte(&y.as_number()?)?)
 });
 
-binary_native_fn!(native_num_gt, x, y, {
+native_fn!(native_num_gt, x, y, {
     Object::Bool(x.as_number()?.gt(&y.as_number()?)?)
 });
 
-binary_native_fn!(native_num_gte, x, y, {
+native_fn!(native_num_gte, x, y, {
     Object::Bool(x.as_number()?.gte(&y.as_number()?)?)
 });
 

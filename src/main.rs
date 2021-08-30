@@ -82,7 +82,7 @@ impl Interpreter {
                     }
                     match self.vm.run() {
                         Ok(Some(res)) => println!("{}", res),
-                        Ok(None) => println!("; unspecified"),
+                        Ok(None) => println!("; unspecified return value"),
                         Err(e) => {
                             self.vm.reset();
                             eprintln!("{}", e);
@@ -93,6 +93,7 @@ impl Interpreter {
             }
         }
     }
+
     fn get_history_file() -> PathBuf {
         match home_dir() {
             Some(mut p) => {
@@ -110,7 +111,7 @@ impl Interpreter {
         match self.vm.load_source(name, source) {
             Ok(()) => (),
             Err(e) => {
-                eprintln!("Compilation error: {}", e);
+                eprintln!("{}", e);
                 std::process::exit(1);
             }
         }
@@ -118,7 +119,7 @@ impl Interpreter {
             Ok(_) => (),
             Err(e) => {
                 e.print_trace();
-                eprintln!("Runtime error: {}", e);
+                eprintln!("{}", e);
                 std::process::exit(1);
             }
         }

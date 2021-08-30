@@ -8,13 +8,48 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TERM_VERBOSE: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_TARGET: x86_64-pc-windows-gnu
     steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      run: make build
-    - name: Run tests
-      run: make test
+      - name: Git checkout
+        uses: actions/checkout@v2
+      - name: Build and Test ${{ env.CARGO_BUILD_TARGET }}
+        run: |
+          rustup default nightly
+          rustup target add $env:CARGO_BUILD_TARGET
+          cargo clippy --release
+          cargo test --release
+          cargo run --release -- tests/*.jibi
+          cargo build --release
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: jibi2-${{ env.CARGO_BUILD_TARGET }}
+          path: |
+            target\${{ env.CARGO_BUILD_TARGET }}\release\jibi2.exe
+  build-linux:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
+    steps:
+    - name: Git checkout
+      uses: actions/checkout@v2
+    - name: Build and test ${{ env.CARGO_BUILD_TARGET }}
+      run: |
+        rustup default nightly
+        rustup target add $CARGO_BUILD_TARGET
+        cargo clippy --release
+        cargo test --release
+        cargo run --release -- tests/*.jibi
+        cargo build --release
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: jibi2-${{ env.CARGO_BUILD_TARGET }}
+        path: |
+          target/${{ env.CARGO_BUILD_TARGET }}/release/jibi2
