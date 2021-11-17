@@ -10,6 +10,7 @@ use jibi2::reader::{LexError, Token, TokenValidator};
 use jibi2::vm::VM;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const TARGET: &str = env!("CARGO_BUILD_TARGET");
 
 const PRELUDE: &str = include_str!("prelude.jibi");
 
@@ -66,7 +67,7 @@ impl Interpreter {
     }
 
     pub fn repl(&mut self) {
-        println!("jibi2 v{}", VERSION);
+        println!("jibi2 v{} (core v{}, {})", VERSION, jibi2::VERSION, TARGET);
         let _ = self.rl.load_history(&self.history_file);
 
         loop {

@@ -53,7 +53,7 @@ impl fmt::Display for Object {
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Pair(pair) => write!(f, "{}", display_pair(pair)),
             Self::Function(func) => write!(f, "{}", func.borrow()),
-            Self::Closure(clos) => write!(f, "{}", clos.borrow().function),
+            Self::Closure(clos) => write!(f, "{}", clos.function),
             Self::NativeFunction(func) => write!(f, "{}", func),
         }
     }
@@ -235,40 +235,39 @@ impl fmt::Display for Function {
 pub struct Closure {
     pub function: Function,
     pub enclosing: Option<ClosureRef>,
-    pub captured: Vec<Option<Rc<RefCell<Object>>>>,
+    pub captured: RefCell<Vec<Option<Rc<RefCell<Object>>>>>,
 }
 
-pub type ClosureRef = Rc<RefCell<Closure>>;
+pub type ClosureRef = Rc<Closure>;
 
 impl Closure {
     pub fn new(func: Function, enclosing: Option<ClosureRef>) -> Self {
         Self {
             function: func,
-            captured: vec![],
+            captured: RefCell::new(vec![]),
             enclosing,
         }
     }
     pub fn into_ref(self) -> ClosureRef {
-        Rc::new(RefCell::new(self))
+        Rc::new(self)
     }
     pub fn get_upvalue(&self, n: usize) -> Object {
         match self.function.upvalues[n] {
-            Variable::Local(i) => self.captured[i - 1].as_ref().unwrap().borrow().clone(),
-            Variable::Upvalue(i) => self.enclosing.as_ref().unwrap().borrow().get_upvalue(i),
+            Variable::Local(i) => self.captured.borrow()[i - 1]
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .clone(),
+            Variable::Upvalue(i) => self.enclosing.as_ref().unwrap().get_upvalue(i),
             _ => panic!(),
         }
     }
-    pub fn set_upvalue(&mut self, n: usize, val: Object) {
+    pub fn set_upvalue(&self, n: usize, val: Object) {
         match self.function.upvalues[n] {
             Variable::Local(i) => {
-                self.captured[i - 1].as_ref().unwrap().replace(val);
+                self.captured.borrow()[i - 1].as_ref().unwrap().replace(val);
             }
-            Variable::Upvalue(i) => self
-                .enclosing
-                .as_ref()
-                .unwrap()
-                .borrow_mut()
-                .set_upvalue(i, val),
+            Variable::Upvalue(i) => self.enclosing.as_ref().unwrap().set_upvalue(i, val),
             _ => panic!(),
         }
     }

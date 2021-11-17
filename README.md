@@ -14,7 +14,7 @@ I also added some optimizations that are not in Crafting Interpreters:
 - Tail call optimization (modify the top call frame when possible instead of pushing a new one,
   mainly to prevents stack overflow in tail recursive functions)
 - Constants re-use (use same constant slot when multiple literals of same value appear)
-- Compile-time evaluation of static expressions (e.g. (+ 12 10) compiles to constant 22)
+- Compile-time evaluation of static expressions (e.g. (+ 12 10) compiles to 22)
 
 ---
 

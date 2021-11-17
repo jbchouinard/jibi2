@@ -81,15 +81,14 @@ impl VM {
         match res {
             Ok(res) => Ok(res),
             Err(e) => {
-                let trace = self.stacktrace();
                 let offset = self.frames.peek_ref(0).ip;
-                let function = &self.frames.peek_ref(0).closure.borrow().function;
+                let function = &self.frames.peek_ref(0).closure.function;
                 let err = VMError {
                     err: e,
                     offset,
                     function: function.name.to_string(),
                     lineno: function.code.get_line(offset),
-                    trace,
+                    trace: self.stacktrace(),
                 };
                 Err(err)
             }
@@ -100,7 +99,7 @@ impl VM {
         for i in 0..self.frames.size {
             let frame = self.frames.get_ref(i);
             let offset = frame.ip - 1;
-            let function = &frame.closure.borrow().function;
+            let function = &frame.closure.function;
             trace.push(format!(
                 "Line {}, in {}",
                 function.code.get_line(offset),
@@ -123,7 +122,7 @@ impl VM {
         macro_rules! read_op {
             () => {{
                 let frame = mutframe!();
-                let op = frame.closure.borrow().function.code.code[frame.ip];
+                let op = frame.closure.function.code.code[frame.ip];
                 frame.ip += 1;
                 op
             }};
@@ -132,12 +131,12 @@ impl VM {
             ($op:ident) => {{
                 let frame = mutframe!();
                 if ($op & OP::LONG) == OP::LONG {
-                    let op = (frame.closure.borrow().function.code.code[frame.ip] as u16) << 8
-                        | (frame.closure.borrow().function.code.code[frame.ip + 1] as u16);
+                    let op = (frame.closure.function.code.code[frame.ip] as u16) << 8
+                        | (frame.closure.function.code.code[frame.ip + 1] as u16);
                     frame.ip += 2;
                     op as usize
                 } else {
-                    let op = frame.closure.borrow().function.code.code[frame.ip];
+                    let op = frame.closure.function.code.code[frame.ip];
                     frame.ip += 1;
                     op as usize
                 }
@@ -146,7 +145,7 @@ impl VM {
         macro_rules! read_constant {
             ($op:ident) => {{
                 let n = read_operand!($op);
-                frame!().closure.borrow().function.code.constants[n].clone()
+                frame!().closure.function.code.constants[n].clone()
             }};
         }
         macro_rules! call_native_fn {
@@ -245,20 +244,20 @@ impl VM {
                 OP::GET_UPVALUE => {
                     let n = read_operand!(op);
                     let closure = self.stack.get_ref(frame!().fp).as_closure()?;
-                    self.stack.push(closure.borrow().get_upvalue(n));
+                    self.stack.push(closure.get_upvalue(n));
                 }
                 OP::SET_UPVALUE => {
                     let n = read_operand!(op);
                     let val = self.stack.pop();
                     let closure = self.stack.get_ref(frame!().fp).as_closure()?;
-                    closure.borrow_mut().set_upvalue(n, val);
+                    closure.set_upvalue(n, val);
                 }
                 OP::CLOSURE | OP::CLOSURE_LONG => {
                     let func = read_constant!(op).as_function()?;
                     let enclosing = self.stack.get_ref(frame!().fp).as_closure()?;
-                    let mut closure = Closure::new(func.borrow().clone(), Some(enclosing));
+                    let closure = Closure::new(func.borrow().clone(), Some(enclosing));
                     for uv in func.borrow().upvalues.iter() {
-                        closure.captured.push(match uv {
+                        closure.captured.borrow_mut().push(match uv {
                             Variable::Local(i) => {
                                 Some(mutframe!().get_upvalue(&mut self.stack, *i))
                             }
@@ -273,7 +272,7 @@ impl VM {
                     let func = self.stack.peek_ref(nargs).clone();
                     match func {
                         Object::Closure(clos) => {
-                            let function = &clos.borrow().function;
+                            let function = &clos.function;
                             if function.arity != nargs {
                                 return Err(ArgumentError::new(format!(
                                     "expected {} arguments, got {}",
@@ -294,8 +293,7 @@ impl VM {
                     let returning = self.frames.pop();
                     let result = self.stack.pop();
                     // Pop off arguments and function
-                    self.stack
-                        .popfree_n(returning.closure.borrow().function.arity + 1);
+                    self.stack.popfree_n(returning.closure.function.arity + 1);
                     self.stack.push(result);
                 }
                 OP::TAIL_CALL => {
@@ -309,8 +307,7 @@ impl VM {
                     let frame = mutframe!();
 
                     // Pop off function object and locals of current function call
-                    self.stack
-                        .popfree_n(frame.closure.borrow().function.arity + 1);
+                    self.stack.popfree_n(frame.closure.function.arity + 1);
 
                     // Push back the next function and its arguments
                     while !saved.is_empty() {
@@ -323,7 +320,7 @@ impl VM {
                         Object::Closure(clos) => {
                             // Modify the CallFrame at the top of the stack instead of
                             // creating a new one.
-                            let function = &clos.borrow().function;
+                            let function = &clos.function;
                             if function.arity != nargs {
                                 return Err(ArgumentError::new(format!(
                                     "expected {} arguments, got {}",
@@ -408,7 +405,6 @@ impl VM {
         Self::printline();
         frame
             .closure
-            .borrow()
             .function
             .code
             .disassemble_instruction(frame.ip, frame.ip);

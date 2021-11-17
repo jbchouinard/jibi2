@@ -6,8 +6,8 @@ use crate::vm::VM;
 
 native_fn!(native_dis, obj, {
     let clos = obj.as_closure()?;
-    let name = Rc::clone(&clos.borrow().function.name);
-    clos.borrow().function.code.disassemble(&name, 0);
+    let name = Rc::clone(&clos.function.name);
+    clos.function.code.disassemble(&name, 0);
     Object::Nil
 });
 

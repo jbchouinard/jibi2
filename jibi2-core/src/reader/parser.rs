@@ -1,6 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+use crate::error::Error;
 use crate::object::Object;
 use crate::reader::PositionTag;
 use crate::reader::Token;
@@ -76,23 +77,26 @@ impl Parser {
         Ok(Object::make_list(list))
     }
 
-    pub fn parse(&mut self) -> Result<Option<(PositionTag, Object)>, SyntaxError> {
+    pub fn parse(&mut self) -> Result<Option<(Object, PositionTag)>, SyntaxError> {
         if self.peek.value == TokenValue::Eof {
             return Ok(None);
         }
         let spos = self.peek.pos.clone();
         match self.sexpr() {
-            Ok(val) => Ok(Some((spos, val))),
+            Ok(val) => Ok(Some((val, spos))),
             Err(e) => Err(e),
         }
     }
+}
 
-    pub fn parse_all(&mut self) -> Result<Vec<(PositionTag, Object)>, SyntaxError> {
-        let mut forms = vec![];
-        while let Some(form) = self.parse()? {
-            forms.push(form)
+impl Iterator for Parser {
+    type Item = Result<(Object, PositionTag), Error>;
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        match self.parse() {
+            Ok(None) => None,
+            Ok(Some(obj)) => Some(Ok(obj)),
+            Err(e) => Some(Err(e.into())),
         }
-        Ok(forms)
     }
 }
 

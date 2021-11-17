@@ -10,3 +10,5 @@ pub mod object;
 pub mod reader;
 pub mod stack;
 pub mod vm;
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

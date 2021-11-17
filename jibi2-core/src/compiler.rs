@@ -10,9 +10,9 @@ use crate::reader::{PositionTag, TokenProducer, Tokenizer};
 use crate::vm::{CallFrame, VM};
 
 pub fn compile_tokens(name: &str, producer: Box<dyn TokenProducer>) -> Result<FunctionRef> {
-    let mut parser = Parser::new(producer);
-    let mut compiler = SexprCompiler::new(Rc::new(name.to_string()));
-    compiler.compile_all(parser.parse_all()?)
+    let parser = Parser::new(producer);
+    let mut compiler = Compiler::new(Rc::new(name.to_string()));
+    compiler.compile(parser)
 }
 
 pub fn compile_source(filename: &str, source: &str) -> Result<FunctionRef> {
@@ -77,7 +77,7 @@ impl FunctionCompiler {
     pub fn boxed(self) -> Box<Self> {
         Box::new(self)
     }
-    pub fn encloses(&mut self, compiler: Box<FunctionCompiler>) {
+    pub fn enclose(&mut self, compiler: Box<FunctionCompiler>) {
         self.enclosing = Some(compiler);
     }
     fn offset(&self) -> usize {
@@ -134,34 +134,40 @@ impl FunctionCompiler {
         self.function.borrow_mut().code.write_at(jmp + 1, b1);
         self.function.borrow_mut().code.write_at(jmp + 2, b2);
     }
-    fn define_variable(&mut self, name: String) -> Result<()> {
-        // Global variable: store in globals
+    fn declare_variable(&mut self, name: String) -> Result<Variable> {
         if self.scope_depth == 0 {
-            self.emit_constant(Object::Symbol(Rc::new(name)));
-            self.emit_instruction(ins::def_global());
-            Ok(())
-        }
-        // Local variable: register local, leave value on stack
-        // since locals are saved on the stack, definitions can only happen at the
-        // top of a new local scope
-        else {
+            Ok(Variable::Global)
+        } else {
             if self.locals.len() >= u16::MAX.into() {
                 panic!("too many local variables")
             }
             for local in self.locals.iter().rev() {
-                if local.depth != -1 && local.depth < self.scope_depth {
+                if local.depth < self.scope_depth {
                     break;
                 }
                 if local.name == name {
                     return Err(SyntaxError::new(
                         self.pos.clone(),
-                        format!("cannot re-define local variable {}", name),
+                        format!("cannot re-declare local variable {}", name),
                     )
                     .into());
                 }
             }
             self.locals.push(Local::new(name, self.scope_depth));
-            Ok(())
+            Ok(Variable::Local(self.locals.len() - 1))
+        }
+    }
+    fn define_variable(&mut self, name: String, var: Variable) -> Result<()> {
+        match var {
+            // Global: store in globals hashmap
+            Variable::Global => {
+                self.emit_constant(Object::Symbol(Rc::new(name)));
+                self.emit_instruction(ins::def_global());
+                Ok(())
+            }
+            // Local: variable is already on the stack, nothing to do
+            Variable::Local(_) => Ok(()),
+            Variable::Upvalue(_) => panic!("defining an upvalue?"),
         }
     }
     fn resolve_upvalue(&mut self, name: &str) -> Option<Variable> {
@@ -319,36 +325,33 @@ impl FunctionCompiler {
     }
 }
 
-pub struct SexprCompiler {
+pub struct Compiler {
     compiler: Box<FunctionCompiler>,
     pos: PositionTag,
 }
 
-impl SexprCompiler {
+impl Compiler {
     pub fn new(name: Rc<String>) -> Self {
         Self {
             compiler: FunctionCompiler::new(name).boxed(),
             pos: PositionTag::new("", 1, 0),
         }
     }
-    pub fn compile(&mut self, sexpr: Object, pos: PositionTag) -> Result<FunctionRef> {
-        self.compiler.pos = pos.clone();
-        self.pos = pos;
-        self.top_level_sexpr(&sexpr)?;
-        let (_, func) = self.compiler.end();
-        Ok(func)
-    }
-    pub fn compile_all(&mut self, forms: Vec<(PositionTag, Object)>) -> Result<FunctionRef> {
+    pub fn compile<I: Iterator<Item = Result<(Object, PositionTag)>>>(
+        &mut self,
+        forms: I,
+    ) -> Result<FunctionRef> {
+        let mut forms = forms.peekable();
         // Empty program, return nil
-        if forms.is_empty() {
+        if forms.peek().is_none() {
             self.compiler.emit_constant(Object::Nil);
         } else {
-            let last_i = forms.len() - 1;
-            for (i, (pos, sexpr)) in forms.into_iter().enumerate() {
+            while let Some(next) = forms.next() {
+                let (sexpr, pos) = next?;
                 self.compiler.pos = pos.clone();
                 self.pos = pos;
                 self.top_level_sexpr(&sexpr)?;
-                if i != last_i {
+                if forms.peek().is_some() {
                     self.compiler.emit_instruction(ins::pop());
                 }
             }
@@ -377,9 +380,10 @@ impl SexprCompiler {
     }
     fn def(&mut self, pair: PairRef) -> Result<()> {
         let [sym, val] = self.n_elements("def", pair)?;
+        let sym = sym.as_symbol()?;
+        let var = self.compiler.declare_variable(sym.to_owned())?;
         self.sexpr(&val)?;
-        self.compiler
-            .define_variable(sym.as_symbol()?.to_string())?;
+        self.compiler.define_variable(sym.to_owned(), var)?;
         Ok(())
     }
     fn sexpr(&mut self, sexpr: &Object) -> Result<()> {
@@ -569,11 +573,11 @@ impl SexprCompiler {
             FunctionCompiler::new(Rc::new("unnamed".to_string())).boxed(),
         );
         self.compiler.pos = self.pos.clone();
-        self.compiler.encloses(prev_compiler);
+        self.compiler.enclose(prev_compiler);
         self.compiler.begin_scope();
         self.compiler.function.borrow_mut().arity = formals.len();
         for name in formals {
-            self.compiler.define_variable(name)?;
+            self.compiler.declare_variable(name.to_string())?;
         }
         self.block(&body)?;
         let (prev_compiler, func) = self.compiler.end();
