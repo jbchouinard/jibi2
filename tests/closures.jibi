@@ -1,11 +1,8 @@
-; Multiple functions closing over the same variable should refer to the same
-; memory location
-
+; Multiple functions closing over the same variable refers to the same memory location
 (def make-closure
     (fn ()
         (def x nil)
         (cons (fn () x) (fn (y) (set! x y)))))
-
 
 (def getter nil)
 (def setter nil)
@@ -20,3 +17,13 @@
 (setter 1337)
 (print "should be 1337: ")
 (print (getter))
+
+; Nested function can access variables in all enclosing scopes 
+(def add-three
+    (fn (x)
+        (fn (y)
+            (fn (z)
+                (+ x y z)))))
+
+(print "should be 6: ")
+(print (((add-three 1) 2) 3))
